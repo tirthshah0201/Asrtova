@@ -1,9 +1,10 @@
 # Astrova — Project Source of Truth
 
-> **Last Updated**: September 2026
-> **Git Commit**: `ced4709`
+> **Last Updated**: September 27, 2026
+> **Git Commit**: `dfc48eb` (base checkpoint; the 2026-09-27 second-session changes are committed on top — exact hash in `git log` and in the final push report)
 > **Branch**: `main`
-> **Remote**: `https://github.com/tirthshah0201/Dharohar-AI.git`
+> **Remote**: `https://github.com/tirthshah0201/Asrtova.git`
+> *Documentation correction: an earlier version of this header listed `ced4709` and the old `Dharohar-AI.git` remote (stale, copied from a previous project name). Corrected here rather than hidden; verified via `git remote -v`.*
 
 ---
 
@@ -17,7 +18,7 @@
 | **Problem** | Indian cultural heritage knowledge is fragmented across sources, inaccessible to global audiences, and poorly digitized |
 | **Solution** | Unified platform for discovering, exploring, and preserving Indian heritage through interactive maps, curated collections, multilingual search, and AI-powered chatbot |
 | **Target Users** | Heritage enthusiasts, students, researchers, tourists, cultural organizations |
-| **Repository** | `https://github.com/tirthshah0201/Dharohar-AI.git` |
+| **Repository** | `https://github.com/tirthshah0201/Asrtova.git` |
 
 ---
 

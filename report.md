@@ -1,5 +1,49 @@
 # Astrova — Project Report
 
+## Admin Portal Overhaul, Data Accuracy & Open-Data Hardening (2026-09-27, second session)
+
+Session scope: fix admin-portal bugs found in a user report (site chrome leaking onto `/admin`, broken media upload, missing CRUD, unsafe deletes), fix two live data-accuracy bugs on public pages, harden the visitor-intelligence data path, then run full verification. All work stays heritage-first, open-data and source-grounded; no feature was fabricated and the AI chatbot remains Under Construction.
+
+### Admin portal bugs found & fixed (all verified end-to-end)
+
+| # | Bug | Fix |
+|---|-----|-----|
+| 1 | Site navbar, user chip ("tirth") and footer rendered on admin pages | New `frontend/components/layout/SiteChrome.tsx` skips site chrome on `/admin`; new `frontend/app/admin/layout.tsx` gives the portal its own metadata ("Admin Portal", noindex), background and landmark structure |
+| 2 | Regular-user sessions hit a dead end on the admin login page | `/admin/auth/me` 403 now surfaces an explanatory note (signed-in as regular user / signed out / session expired) instead of a silent failure |
+| 3 | Media upload returned 404 | Upload POSTs now go through `/api/proxy/admin/media/upload`; proxy preserves the caller's multipart content-type and forwards binary bodies as `arrayBuffer()` instead of forcing JSON |
+| 4 | Uploaded media files 404 in the frontend | New traversal-safe passthrough `frontend/app/api/uploads/[...path]/route.ts` (strict segment regex; `../` attempts → 404) |
+| 5 | User delete failed (BUG-007 contract) and errors were swallowed | Delete now sends `{"confirm":"DELETE:<email>"}`; all delete handlers (media/locations/sources/periods/users) got try/catch that close the dialog on failure |
+| 6 | Admin login not rate-limited, case-sensitive email lookup | New `adminLoginRateLimit` (5/15 min per IP) on `POST /admin/auth/login`; `LOWER(email) = LOWER($1)` + trim |
+| 7 | Admin could delete themselves or the last admin | `SELF_DELETE` / `LAST_ADMIN` guards return 400 (browser-verified toast "You cannot delete your own admin account.") |
+| 8 | Media DELETE left orphan files on disk | Platform-hosted URLs now delete the physical file (upload → 201, file → 200, delete → 200, file → 404 verified) |
+| 9 | Collections tab was read-only | Full CRUD added: create with auto-slug, edit incl. active/inactive, delete with confirm (browser-verified net-zero round trip: 6→7→6) |
+| 10 | Overview had no error state; stats partially hardcoded | Error alert + Retry, quick-action shortcuts, live dashboard stats |
+| 11 | Login/dashboard UI unpolished | Redesigned login (`<main>` landmark, back-to-site link, branded card, note area) and dashboard (dark sidebar with 8 sections, mobile pill nav, topbar with admin chip/refresh/sign-out) |
+
+Admin E2E in the browser: dashboard tour, collections CRUD round trip, multipart upload round trip, user delete 200, self-delete 400, both temp QA accounts deleted afterward. **Honest limitation:** the original `admin@astrova.in` password is unknown and undocumented, so E2E was performed with a temporary promoted admin account (deleted after testing); the original account itself was not logged into.
+
+### Public data-accuracy fixes
+
+1. **Heritage directory grouped view hid data while claiming to show it** — a hardcoded 9-category allowlist rendered 9 of 96 entries under "Showing 96". Categories are now derived from the response (`extraCategories`/`categoryChips`): 96 cards across 20 categories verified.
+2. **Homepage stats were hardcoded and stale** (52 records, 9 categories, stale state badges) — now live from `/heritage` + `/heritage/state-counts` (verified "12 | 96 | 6 | 20", Gujarat badge 10).
+3. **AI page fabricated a fallback count** (`?? 74`) — now renders an em-dash placeholder when data is unavailable.
+4. **Mobile overflow** — NearbyExplorer caused 85 px horizontal overflow at 430 px width; grid is now `grid-cols-1 lg:grid-cols-2` with `minmax(0,1fr)`.
+
+### Open-data / visitor-intelligence hardening
+
+- New `backend/src/services/providers.ts` adapter layer and `enrichment.ts` (Feature H stateless Wikidata enrichment with graceful degradation).
+- Visitor-intelligence scoring moved to a documented 9-input model including `hourlyAqi`; malformed provider payloads are guarded; stale cache is labeled honestly; nearby facility category filter and stay address added; `ExternalReferences` UI surfaces source links; `retrieved_date` backfilled for 22 source rows.
+
+### Verification (all green, executed 2026-09-27)
+
+- Backend: `tsc` + build clean; `test-visitor-intelligence` 10/10; `test-enrichment` 4/4; `test-visit-module` 16/16; DB audit 34/34 (heritage 96, locations 54, media 72, sources 22, users 7)
+- Frontend: `tsc` clean; `eslint --quiet` 0 errors; production build 13/13 pages
+- Browser regression: home, explore, directory, detail, timeline, collections, auth, favorites, admin (login + portal), about, AI placeholder (still Under Construction)
+- Accessibility: lang, single h1, landmarks, image alt, control names/labels — home/detail/admin all pass; explore duplicate h1 confirmed a hydration transient
+- Responsive: 1440/1280/1024/900/768/740/720/430/390/360 — no horizontal overflow
+- Security spot checks: no key → 401, bad key → 401, admin without session → 401, empty admin login → 400, upload traversal → 404, proxy visitor-intelligence → 200, invalid uuid → 401
+- Test artifacts cleaned: temp QA users deleted, orphan test PNG removed, temp cookies/paths removed
+
 ## P1.39 Independent Verification (2026-09-06, second session)
 
 All P1.39 fix claims were independently re-verified against source code, live API, live DB and the browser: **63/63 tests pass**. Key confirmations: pagination is SQL-level (EXPLAIN ANALYZE shows `Limit` node; response 84 KB → 5.6 KB at limit=5); Adalaj description = 543 chars from project's own migration 014; JWT replay after logout = 401 TOKEN_REVOKED; admin user DELETE survived 4 wrong/missing-confirmation attempts and only deleted with exact confirm (favorites_removed=1 real count); 54/54 location slugs populated; 0 orphans; 0 RAG artifacts. **Migration-state issue RESOLVED:** 009–027 each verified via live-DB signature probe then recorded — runner now reports 28/28 applied and is safe to use. Media: 39/72 resolve on disk; 33 documented in `docs/ASSETS-REQUIRED.md` (fallback verified). Status remains **PASS WITH WARNINGS**.
@@ -232,11 +276,11 @@ Expanded the visitor-information section into the full Heritage Visit Intelligen
 - Security: API key server-side only, parameterized SQL, rate limits, sanitized errors (no stack traces), no client exposure of credentials — verified
 - Test artifacts cleaned up (audit account and its favorite removed; temp files deleted)
 
-Git: no commit and no push were performed; changes remain in the working tree.
+Git: those changes were subsequently committed as `dfc48eb` ("feat(astrova): add heritage visit intelligence and connectivity fixes").
 
 ## GitHub Status
 
-Current checkpoint: `ced4709` (main)
-Remote: https://github.com/tirthshah0201/Dharohar-AI.git
+Current checkpoint before this session's commit: `dfc48eb` (main)
+Remote: https://github.com/tirthshah0201/Asrtova.git
 
-GitHub push completed: `ced4709` (main → origin/main)
+Documentation correction (2026-09-27): an earlier version of this block listed `ced4709` and `https://github.com/tirthshah0201/Dharohar-AI.git`, which had been copied from a previous project and was stale/incorrect. Corrected here without hiding the error; the live remote was verified with `git remote -v` and `git ls-remote`.

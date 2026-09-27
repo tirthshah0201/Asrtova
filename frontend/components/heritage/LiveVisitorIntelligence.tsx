@@ -94,6 +94,15 @@ function formatDay(value: unknown): string {
   return Number.isNaN(date.getTime()) ? "Day" : date.toLocaleDateString("en-IN", { weekday: "short" });
 }
 
+/** Wind direction in degrees → 16-point compass label (e.g. 271 → "W"). */
+function windDirectionLabel(degrees: number | null): string {
+  if (degrees == null || !Number.isFinite(degrees)) return "";
+  const dirs = ["N", "NNE", "NE", "ENE", "E", "ESE", "SE", "SSE", "S", "SSW", "SW", "WSW", "W", "WNW", "NW", "NNW"];
+  const normalized = ((degrees % 360) + 360) % 360;
+  const index = Math.round(normalized / 22.5) % 16;
+  return dirs[index];
+}
+
 function formatUpdated(value: string): string {
   const date = new Date(value);
   return Number.isNaN(date.getTime())
@@ -159,8 +168,10 @@ export function LiveVisitorIntelligence({ heritageId, hasCoordinates }: VisitorI
                 <p className="mt-1 text-sm leading-relaxed text-muted">{data.situation.reason}</p>
                 <p className="mt-2 text-xs text-muted">
                   Astrova shows a status only when a trusted source provides one — check the official
-                  sources in &ldquo;Sources &amp; References&rdquo; before travelling. Last checked{" "}
-                  {formatUpdated(data.situation.checkedAt)}.
+                  sources in &ldquo;Sources &amp; References&rdquo; before travelling.
+                  {data.situation.source && (
+                    <> Last checked {formatUpdated(data.situation.checkedAt)}.</>
+                  )}
                 </p>
               </div>
             </div>
@@ -206,11 +217,18 @@ export function LiveVisitorIntelligence({ heritageId, hasCoordinates }: VisitorI
                     <p className="mt-2 text-sm font-medium text-terracotta">{weatherLabel(data.weather?.current.weatherCode)}</p>
                   </div>
                   <Cloud className="h-8 w-8 text-terracotta/70" aria-hidden="true" />
-                </div>
-                <div className="mt-6 grid grid-cols-2 gap-3 text-sm">
-                  <div><span className="text-muted">Humidity</span><p className="font-semibold text-charcoal">{formatNumber(data.weather?.current.relativeHumidity, "%") || "--"}</p></div>
-                  <div><span className="text-muted">Wind</span><p className="font-semibold text-charcoal">{formatNumber(data.weather?.current.windSpeed, " km/h") || "--"}</p></div>
-                  <div><span className="text-muted">Rain</span><p className="font-semibold text-charcoal">{formatNumber(data.weather?.current.precipitation, " mm") || "--"}</p></div>
+                </div>                  <div className="mt-6 grid grid-cols-2 gap-3 text-sm">
+                    <div><span className="text-muted">Humidity</span><p className="font-semibold text-charcoal">{formatNumber(data.weather?.current.relativeHumidity, "%") || "--"}</p></div>
+                    <div>
+                      <span className="text-muted">Wind</span>
+                      <p className="font-semibold text-charcoal">
+                        {formatNumber(data.weather?.current.windSpeed, " km/h") || "--"}
+                        {numberValue(data.weather?.current.windDirection) != null && (
+                          <span className="ml-1 font-normal text-muted">{windDirectionLabel(numberValue(data.weather?.current.windDirection))}</span>
+                        )}
+                      </p>
+                    </div>
+                    <div><span className="text-muted">Rain</span><p className="font-semibold text-charcoal">{formatNumber(data.weather?.current.precipitation, " mm") || "--"}</p></div>
                   <div><span className="text-muted">Cloud cover</span><p className="font-semibold text-charcoal">{formatNumber(data.weather?.current.cloudCover, "%") || "--"}</p></div>
                   <div><span className="text-muted">UV index</span><p className="font-semibold text-charcoal">{formatNumber(data.weather?.current.uvIndex) || "--"}</p></div>
                   <div>
@@ -247,6 +265,8 @@ export function LiveVisitorIntelligence({ heritageId, hasCoordinates }: VisitorI
                   <div><span className="text-muted">PM2.5</span><p className="font-semibold text-charcoal">{formatNumber(data.airQuality?.current.pm25, " µg/m³") || "--"}</p></div>
                   <div><span className="text-muted">PM10</span><p className="font-semibold text-charcoal">{formatNumber(data.airQuality?.current.pm10, " µg/m³") || "--"}</p></div>
                   <div><span className="text-muted">Ozone</span><p className="font-semibold text-charcoal">{formatNumber(data.airQuality?.current.ozone, " µg/m³") || "--"}</p></div>
+                  <div><span className="text-muted">Nitrogen dioxide</span><p className="font-semibold text-charcoal">{formatNumber(data.airQuality?.current.nitrogenDioxide, " µg/m³") || "--"}</p></div>
+                  <div><span className="text-muted">Carbon monoxide</span><p className="font-semibold text-charcoal">{formatNumber(data.airQuality?.current.carbonMonoxide, " µg/m³") || "--"}</p></div>
                 </div>
                 <p className="mt-5 border-t border-cream pt-3 text-xs text-muted">
                   <span className="rounded-full bg-heritage-gold/10 px-2 py-0.5 font-medium text-heritage-gold">Current · Open-Meteo</span>
@@ -272,7 +292,8 @@ export function LiveVisitorIntelligence({ heritageId, hasCoordinates }: VisitorI
                   </div>
                 </div>
                 <p className="mt-4 text-xs text-white/50">
-                  Scored out of 90 from forecast temperature, rain probability, UV, wind and daylight —
+                  Scored out of 90 from forecast temperature, feels-like temperature, humidity, rain
+                  probability, rainfall, UV, wind, air quality and daylight —
                   future daylight hours only. It is not an official heritage authority recommendation.
                 </p>
               </div>

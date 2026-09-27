@@ -625,8 +625,8 @@ NO PUSH PERFORMED — documentation only
 | Collections | ✅ Complete (6 collections) |
 | Authentication | ✅ Complete (JWT + HttpOnly) |
 | Favorites | ✅ Complete (per-user isolated) |
-| Admin Portal | ✅ Complete (8 tabs, full CRUD) |
-| Admin Media Upload | ✅ Complete (Image + Video) |
+| Admin Portal | ✅ Complete (8 tabs, full CRUD, collections CRUD, site chrome separated, delete guards) |
+| Admin Media Upload | ✅ Complete (Image + Video, proxy upload + uploads passthrough) |
 | Heritage Visit Intelligence (Features A–G) | ✅ IMPLEMENTED (2026-09-27, verified end-to-end) |
 | Heritage Situation (live status) | ⏸ Honest unavailable state — trusted source integration PLANNED |
 | Trusted external ingestion pipeline (Feature H) | 🟡 PARTIAL — provenance via `sources` + verification_status implemented; automated Wikidata/Inheritage ingestion PLANNED |
@@ -636,9 +636,10 @@ NO PUSH PERFORMED — documentation only
 
 ### Final GitHub Checkpoint
 - Branch: main
-- Latest commit: `ced4709`
-- Remote: https://github.com/tirthshah0201/Dharohar-AI.git
-- Status: Pushed and synchronized
+- Latest commit before the 2026-09-27 second session: `dfc48eb`
+- Remote: https://github.com/tirthshah0201/Asrtova.git
+- Status: verified via `git remote -v` / `git ls-remote`
+- Documentation correction (2026-09-27): an earlier version of this block listed `ced4709` and `https://github.com/tirthshah0201/Dharohar-AI.git` — copied from a previous project and stale; corrected here rather than silently removed.
 
 ---
 
@@ -672,4 +673,40 @@ NO PUSH PERFORMED — documentation only
 - Regression: home, explore (search+map), heritage dir, heritage detail, timeline, collections, collection detail, auth, favorites, admin (login screen), media, about, AI placeholder — PASS
 
 ### Git
-- No commit, no push performed (working tree only), per instruction
+- These HVI changes were subsequently committed as `dfc48eb` ("feat(astrova): add heritage visit intelligence and connectivity fixes").
+
+---
+
+## Admin Portal Overhaul, Data Accuracy & Open-Data Hardening (2026-09-27, second session)
+
+### Status: COMPLETE — all fixes browser-verified; full test/build suite green
+
+### Admin portal (reported bugs fixed)
+1. **Site chrome leaked onto admin pages** — new `SiteChrome` layout wrapper skips the public Navbar/user chip/Footer on `/admin`; dedicated `admin/layout.tsx` provides own metadata ("Admin Portal", noindex), background and landmarks (no nested `<main>`).
+2. **Regular-user sessions on admin login** — 403 from `/admin/auth/me` now renders an explanatory note (regular user / signed out / expired) instead of a dead end.
+3. **Media upload 404** — upload now routes via `/api/proxy/admin/media/upload`; proxy preserves multipart content-type and forwards binary bodies (`arrayBuffer`) instead of forcing JSON.
+4. **Uploaded files 404 in UI** — new traversal-safe `/api/uploads/[...path]` passthrough (strict segment validation; `../` → 404).
+5. **User delete contract + swallowed errors** — sends `{"confirm":"DELETE:<email>"}`; every delete handler closes its dialog on failure.
+6. **Admin login hardening** — `adminLoginRateLimit` (5/15 min per IP) + case-insensitive trimmed email lookup.
+7. **Dangerous deletes blocked** — `SELF_DELETE` and `LAST_ADMIN` guards return 400 (verified with toast).
+8. **Orphan media files** — media DELETE now removes the platform-hosted physical file (upload/delete/file-404 round trip verified).
+9. **Collections tab** — full CRUD added (create with auto-slug, edit incl. active state, delete with confirm); browser-verified 6→7→6.
+10. **Overview UX** — error alert + Retry, quick actions, live stats; redesigned login card and dashboard shell (dark sidebar, mobile pill nav, topbar with admin chip).
+
+### Public data-accuracy fixes
+1. Directory grouped view showed only 9 hardcoded categories (9 of 96 entries) while claiming "Showing 96" — categories now derived from data (96 cards / 20 categories).
+2. Homepage stats were hardcoded/stale — now live from `/heritage` + `/heritage/state-counts` (verified 12 | 96 | 6 | 20).
+3. AI page `?? 74` fabricated fallback → honest em-dash placeholder (page remains Under Construction).
+4. Mobile overflow in NearbyExplorer (85 px at 430 w) fixed with `grid-cols-1 lg:grid-cols-2` + `minmax(0,1fr)`.
+
+### Open-data hardening
+- New `providers.ts` adapter layer + `enrichment.ts` stateless Wikidata enrichment (Feature H, graceful degradation, no fabrication).
+- 9-input visitor-intelligence scoring incl. `hourlyAqi`; malformed-payload guards; honest stale-cache labels; nearby facility category filter; stay address; `ExternalReferences` UI; `retrieved_date` backfilled (22 source rows).
+
+### Verification (2026-09-27)
+- Backend tsc + build; tests 10/10 (visitor intelligence), 4/4 (enrichment), 16/16 (visit module); DB audit 34/34 — PASS
+- Frontend tsc + eslint 0 errors + production build 13/13 pages — PASS
+- A11y (lang, single h1, landmarks, alt, names/labels): home/detail/admin PASS; responsive 10 widths no overflow PASS
+- Security spot checks: 401s (no/bad key, admin without session, invalid uuid), 400 (empty login), 404 (upload traversal) — PASS
+- Admin E2E with temporary promoted admin account (deleted after testing) — original `admin@astrova.in` password is unknown/undocumented, so that specific login was not exercised
+- AI chatbot remains Under Construction; crowd info, conservation monitoring, hotel booking and RAG remain future-list (NOT implemented)

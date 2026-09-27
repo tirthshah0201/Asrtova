@@ -1,10 +1,15 @@
 import { query } from "../database";
 import { isValidSlug, isUUID } from "../utils/slug";
+import {
+  OPEN_METEO_WEATHER,
+  fetchJson,
+  isRecord,
+  sourceEntry,
+} from "./providers";
 
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality";
 const CACHE_TTL_MS = 10 * 60 * 1000;
-const REQUEST_TIMEOUT_MS = 5000;
 const MAX_CACHE_ENTRIES = 200;
 
 interface LocationRow {
@@ -91,6 +96,8 @@ interface WeatherData {
 
 interface AirQualityData {
   current: Record<string, unknown>;
+  /** Hourly US AQI keyed by provider wall-clock time ("YYYY-MM-DDTHH:MM"). */
+  hourlyAqi: Record<string, number>;
 }
 
 interface Recommendation {
@@ -123,47 +130,128 @@ function clamp(value: number, minimum: number, maximum: number): number {
 }
 
 function scoreTemperature(value: number): number {
-  if (value >= 18 && value <= 30) return 25;
-  if (value >= 14 && value <= 34) return 18;
-  if (value >= 10 && value <= 38) return 10;
-  return 4;
+  // Max 18 points.
+  if (value >= 18 && value <= 30) return 18;
+  if (value >= 14 && value <= 34) return 13;
+  if (value >= 10 && value <= 38) return 7;
+  return 3;
 }
 
-function scoreHour(index: number, hourly: Record<string, unknown>): { score: number; reason: string } {
+/** Score one forecast hour 0–90.
+ *
+ * Inputs (each with neutral partial credit when the provider omits it, so a
+ * missing value never fabricates a penalty *or* a bonus):
+ * temperature 18 · apparent temperature 7 · humidity 8 · rain probability 12 ·
+ * precipitation 5 · UV 12 · wind 8 · air quality 10 · daylight 10 = 90 max.
+ *
+ * `aqiByTime` maps provider wall-clock time → US AQI (from the air-quality
+ * provider's hourly series) so air quality can influence *which hour* is
+ * recommended, not just the current-conditions card.
+ */
+function scoreHour(
+  index: number,
+  hourly: Record<string, unknown>,
+  aqiByTime: Record<string, number> | null
+): { score: number; reason: string } {
   const temperature = Number(hourly.temperature);
+  const apparentTemperature = Number(hourly.apparentTemperature);
+  const relativeHumidity = Number(hourly.relativeHumidity);
   const precipitationProbability = Number(hourly.precipitationProbability);
+  const precipitation = Number(hourly.precipitation);
   const uvIndex = Number(hourly.uvIndex);
   const windSpeed = Number(hourly.windSpeed);
+  const aqi =
+    aqiByTime && typeof hourly.time === "string"
+      ? aqiByTime[hourly.time]
+      : undefined;
   let score = 0;
   const reasons: string[] = [];
 
+  // Temperature (18)
   if (Number.isFinite(temperature)) {
     score += scoreTemperature(temperature);
     if (temperature <= 30) reasons.push("comfortable temperature");
   } else {
-    score += 12;
-  }
-  if (Number.isFinite(precipitationProbability)) {
-    score += precipitationProbability <= 20 ? 20 : precipitationProbability <= 45 ? 12 : 4;
-    if (precipitationProbability <= 20) reasons.push("low rain probability");
-  } else {
-    score += 12;
-  }
-  if (Number.isFinite(uvIndex)) {
-    score += uvIndex <= 5 ? 20 : uvIndex <= 8 ? 12 : 5;
-    if (uvIndex <= 5) reasons.push("lower UV exposure");
-  } else {
-    score += 12;
-  }
-  if (Number.isFinite(windSpeed)) {
-    score += windSpeed <= 20 ? 15 : windSpeed <= 35 ? 9 : 3;
-    if (windSpeed <= 20) reasons.push("light wind");
-  } else {
     score += 9;
   }
+
+  // Apparent / feels-like temperature (7)
+  if (Number.isFinite(apparentTemperature)) {
+    score +=
+      apparentTemperature >= 18 && apparentTemperature <= 30
+        ? 7
+        : apparentTemperature >= 14 && apparentTemperature <= 34
+          ? 5
+          : apparentTemperature >= 10 && apparentTemperature <= 38
+            ? 3
+            : 1;
+    if (apparentTemperature >= 18 && apparentTemperature <= 30 && !reasons.includes("comfortable temperature")) {
+      reasons.push("comfortable feels-like temperature");
+    }
+  } else {
+    score += 4;
+  }
+
+  // Relative humidity (8)
+  if (Number.isFinite(relativeHumidity)) {
+    score +=
+      relativeHumidity >= 30 && relativeHumidity <= 60
+        ? 8
+        : relativeHumidity >= 20 && relativeHumidity <= 70
+          ? 6
+          : 3;
+    if (relativeHumidity >= 30 && relativeHumidity <= 60) reasons.push("comfortable humidity");
+  } else {
+    score += 4;
+  }
+
+  // Rain probability (12)
+  if (Number.isFinite(precipitationProbability)) {
+    score += precipitationProbability <= 20 ? 12 : precipitationProbability <= 45 ? 8 : 2;
+    if (precipitationProbability <= 20) reasons.push("low rain probability");
+  } else {
+    score += 7;
+  }
+
+  // Precipitation amount (5)
+  if (Number.isFinite(precipitation)) {
+    score += precipitation <= 0 ? 5 : precipitation <= 1 ? 4 : precipitation <= 5 ? 2 : 0;
+    if (precipitation <= 0) reasons.push("no rainfall expected");
+  } else {
+    score += 3;
+  }
+
+  // UV index (12)
+  if (Number.isFinite(uvIndex)) {
+    score += uvIndex <= 5 ? 12 : uvIndex <= 8 ? 8 : 3;
+    if (uvIndex <= 5) reasons.push("lower UV exposure");
+  } else {
+    score += 7;
+  }
+
+  // Wind (8)
+  if (Number.isFinite(windSpeed)) {
+    score += windSpeed <= 20 ? 8 : windSpeed <= 35 ? 5 : 2;
+    if (windSpeed <= 20) reasons.push("light wind");
+  } else {
+    score += 5;
+  }
+
+  // Air quality — US AQI for this hour (10). Neutral credit when the
+  // air-quality provider has no hourly value for the hour.
+  if (typeof aqi === "number" && Number.isFinite(aqi)) {
+    score += aqi <= 50 ? 10 : aqi <= 100 ? 7 : aqi <= 150 ? 4 : 1;
+    if (aqi <= 50) reasons.push("good air quality");
+  } else {
+    score += 5;
+  }
+
+  // Daylight (10)
   score += Number.isFinite(Number(hourly.isDay)) && Number(hourly.isDay) === 1 ? 10 : 4;
 
-  return { score: clamp(Math.round(score), 0, 90), reason: reasons.slice(0, 3).join(", ") || `hour ${index}` };
+  // Keep every reason: buildRecommendation trims the final list, and the
+  // user should see which of the nine inputs actually drove the pick.
+  return { score: clamp(Math.round(score), 0, 90), reason: reasons.join(", ") || `hour ${index}` };
 }
 
 interface Candidate {
@@ -203,7 +291,8 @@ function shiftWallClock(value: string, hours: number): string | null {
 
 export function buildRecommendation(
   hourly: Array<Record<string, unknown>>,
-  utcOffsetSeconds: number | null = null
+  utcOffsetSeconds: number | null = null,
+  aqiByTime: Record<string, number> | null = null
 ): Recommendation | null {
   if (hourly.length === 0) return null;
 
@@ -227,7 +316,7 @@ export function buildRecommendation(
         : all;
 
   const scored = pool
-    .map((candidate) => ({ ...candidate, ...scoreHour(candidate.index, candidate.hour) }))
+    .map((candidate) => ({ ...candidate, ...scoreHour(candidate.index, candidate.hour, aqiByTime) }))
     .sort((left, right) => right.score - left.score);
   const best = scored[0];
 
@@ -278,24 +367,16 @@ export function buildRecommendation(
     bestWindow,
     score: best.score,
     confidence,
-    reasons: reasons.slice(0, 4),
+    reasons: reasons.slice(0, 6),
   };
 }
 
-async function fetchJson<T>(url: string): Promise<T> {
-  const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);
-  try {
-    const response = await fetch(url, { signal: controller.signal, headers: { Accept: "application/json" } });
-    if (!response.ok) throw new Error(`provider returned ${response.status}`);
-    return await response.json() as T;
-  } finally {
-    clearTimeout(timeout);
-  }
-}
-
-function normalizeWeather(payload: Record<string, unknown>): WeatherData {
-  const current = (payload.current || {}) as Record<string, unknown>;
+function normalizeWeather(rawPayload: unknown): WeatherData {
+  // Malformed provider body (null / scalar / array) must degrade like any
+  // other provider failure instead of throwing through to a 502.
+  if (!isRecord(rawPayload)) throw new Error("malformed weather payload from provider");
+  const payload = rawPayload;
+  const current = isRecord(payload.current) ? payload.current : {};
   const hourlyPayload = (payload.hourly || {}) as Record<string, unknown[]>;
   const dailyPayload = (payload.daily || {}) as Record<string, unknown[]>;
   const toHourlyRows = (source: Record<string, unknown[]>) => {
@@ -304,6 +385,7 @@ function normalizeWeather(payload: Record<string, unknown>): WeatherData {
       time,
       temperature: source.temperature_2m?.[index],
       apparentTemperature: source.apparent_temperature?.[index],
+      relativeHumidity: source.relative_humidity_2m?.[index],
       precipitation: source.precipitation?.[index],
       precipitationProbability: source.precipitation_probability?.[index],
       weatherCode: source.weather_code?.[index],
@@ -360,10 +442,23 @@ function aqiCategory(value: number): string {
   return "Hazardous";
 }
 
-function normalizeAirQuality(payload: Record<string, unknown>): AirQualityData {
-  const current = (payload.current || {}) as Record<string, unknown>;
+function normalizeAirQuality(rawPayload: unknown): AirQualityData {
+  // Malformed body must degrade like any other provider failure.
+  if (!isRecord(rawPayload)) throw new Error("malformed air-quality payload from provider");
+  const payload = rawPayload;
+  const current = isRecord(payload.current) ? payload.current : {};
   const usAqi = Number(current.us_aqi);
+  // Hourly US AQI (wall-clock time → value) feeds best-time scoring.
+  const hourlySource = isRecord(payload.hourly) ? payload.hourly : {};
+  const hourlyTimes = Array.isArray(hourlySource.time) ? hourlySource.time : [];
+  const hourlyValues = Array.isArray(hourlySource.us_aqi) ? hourlySource.us_aqi : [];
+  const hourlyAqi: Record<string, number> = {};
+  hourlyTimes.forEach((time, index) => {
+    const value = Number(hourlyValues[index]);
+    if (typeof time === "string" && Number.isFinite(value)) hourlyAqi[time] = value;
+  });
   return {
+    hourlyAqi,
     current: {
       time: current.time,
       index: current.us_aqi ?? current.european_aqi,
@@ -383,7 +478,7 @@ function buildUrls(latitude: number, longitude: number): { weather: string; airQ
     latitude: String(latitude),
     longitude: String(longitude),
     current: "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index",
-    hourly: "temperature_2m,apparent_temperature,precipitation,precipitation_probability,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index,is_day",
+    hourly: "temperature_2m,apparent_temperature,relative_humidity_2m,precipitation,precipitation_probability,weather_code,wind_speed_10m,wind_direction_10m,cloud_cover,uv_index,is_day",
     daily: "sunrise,sunset,temperature_2m_max,temperature_2m_min,precipitation_sum,precipitation_probability_max,weather_code",
     forecast_days: "7",
     timezone: "auto",
@@ -392,6 +487,8 @@ function buildUrls(latitude: number, longitude: number): { weather: string; airQ
     latitude: String(latitude),
     longitude: String(longitude),
     current: "pm2_5,pm10,carbon_monoxide,nitrogen_dioxide,ozone,dust,us_aqi,european_aqi",
+    hourly: "us_aqi",
+    forecast_days: "7",
     timezone: "auto",
   });
   return { weather: `${WEATHER_URL}?${weatherParams}`, airQuality: `${AIR_QUALITY_URL}?${airParams}` };
@@ -432,11 +529,15 @@ async function loadResponse(row: HeritageRow, staleResponse?: VisitorIntelligenc
     weather,
     airQuality,
     recommendation: weather
-      ? buildRecommendation(weather.hourly, weather.utcOffsetSeconds ?? null)
+      ? buildRecommendation(
+          weather.hourly,
+          weather.utcOffsetSeconds ?? null,
+          airQuality && Object.keys(airQuality.hourlyAqi).length > 0
+            ? airQuality.hourlyAqi
+            : null
+        )
       : staleResponse?.recommendation || null,
-    sources: [
-      { name: "Open-Meteo", type: "weather and air quality", url: "https://open-meteo.com/" },
-    ],
+    sources: [sourceEntry(OPEN_METEO_WEATHER, "weather and air quality")],
     meta: { generatedAt: fetchedAt, weatherFetchedAt: weatherResult.status === "fulfilled" ? fetchedAt : null, airQualityFetchedAt: airQualityResult.status === "fulfilled" ? fetchedAt : null, stale, errors },
   };
   return response;
@@ -470,16 +571,26 @@ export async function getVisitorIntelligence(identifier: string): Promise<Visito
       weather: null,
       airQuality: null,
       recommendation: null,
-      sources: [
-        { name: "Open-Meteo", type: "weather and air quality", url: "https://open-meteo.com/" },
-      ],
+      sources: [sourceEntry(OPEN_METEO_WEATHER, "weather and air quality")],
       meta: { generatedAt: new Date().toISOString(), weatherFetchedAt: null, airQualityFetchedAt: null, stale: false, errors: ["Location coordinates are unavailable for this heritage entity."] },
     };
   }
 
   const cacheKey = `${row.id}:${row.latitude}:${row.longitude}`;
   const cached = cache.get(cacheKey);
-  if (cached && cached.expiresAt > Date.now()) return { ...cached.response, meta: { ...cached.response.meta, stale: false } };
+  if (cached && cached.expiresAt > Date.now()) {
+    // Preserve an honest staleness flag: a cached entry written after a
+    // failed refresh stays stale, and data older than the TTL is stale even
+    // though a re-cache extended the entry's lifetime.
+    const fetchedAt = Date.parse(
+      cached.response.meta.weatherFetchedAt || cached.response.meta.generatedAt
+    );
+    const agedOut = Number.isFinite(fetchedAt) && Date.now() - fetchedAt > CACHE_TTL_MS;
+    return {
+      ...cached.response,
+      meta: { ...cached.response.meta, stale: cached.response.meta.stale || agedOut },
+    };
+  }
   const response = await loadResponse(row, cached?.response);
   cache.delete(cacheKey);
   // Never cache a weather-less result — a transient provider failure would

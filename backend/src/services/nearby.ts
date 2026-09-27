@@ -42,7 +42,7 @@ export interface NearbyHeritageItem {
 
 export interface NearbyPlaceItem {
   name: string;
-  category: "culture" | "food" | "park" | "parking" | "transport" | "attraction";
+  category: "culture" | "food" | "park" | "parking" | "transport" | "attraction" | "facility";
   kind: string;          // raw OSM tag value, e.g. "museum"
   distanceKm: number;
   lat: number;
@@ -58,6 +58,8 @@ export interface NearbyStayItem {
   website?: string;
   phone?: string;
   stars?: number;
+  /** OSM addr:* metadata when present — never fabricated. */
+  address?: string;
 }
 
 export interface NearbyResponse {
@@ -161,7 +163,7 @@ const PLACE_FILTERS = `
   way(around:${SEARCH_RADIUS_M},LAT,LON)["amenity"="parking"];
   node(around:${SEARCH_RADIUS_M},LAT,LON)["leisure"~"park|garden"];
   way(around:${SEARCH_RADIUS_M},LAT,LON)["leisure"~"park|garden"];
-  node(around:${SEARCH_RADIUS_M},LAT,LON)["amenity"="bus_station"];
+  node(around:${SEARCH_RADIUS_M},LAT,LON)["amenity"~"bus_station|drinking_water|toilets|pharmacy|hospital|clinic|post_office|bank|atm|shelter"];
   node(around:${SEARCH_RADIUS_M},LAT,LON)["railway"~"station|halt"];
   node(around:${SEARCH_RADIUS_M},LAT,LON)["historic"~"memorial|monument|castle|temple|archaeological_site"];
   way(around:${SEARCH_RADIUS_M},LAT,LON)["historic"~"memorial|monument|castle|archaeological_site"];
@@ -236,6 +238,8 @@ function classifyPlace(tags: Record<string, string>): NearbyPlaceItem["category"
   if (tags.amenity === "restaurant" || tags.amenity === "cafe" || tags.amenity === "fast_food" || tags.amenity === "bar" || tags.amenity === "pub") return "food";
   if (tags.amenity === "parking") return "parking";
   if (tags.leisure) return "park";
+  // Public facilities: things a visitor may actually need.
+  if (["drinking_water", "toilets", "pharmacy", "hospital", "clinic", "post_office", "bank", "atm", "shelter"].includes(tags.amenity || "")) return "facility";
   if (tags.amenity === "bus_station" || tags.railway) return "transport";
   if (tags.tourism === "museum" || tags.tourism === "gallery") return "culture";
   return null;
@@ -281,6 +285,10 @@ export function normalizeOverpassElements(
       if (tags.phone || tags["contact:phone"]) stay.phone = tags.phone || tags["contact:phone"];
       const stars = Number(tags.stars);
       if (Number.isFinite(stars) && stars > 0 && stars <= 5) stay.stars = stars;
+      const addressParts = [tags["addr:housenumber"], tags["addr:street"], tags["addr:locality"] || tags["addr:suburb"]]
+        .filter((part): part is string => Boolean(part && part.trim()));
+      if (addressParts.length > 0) stay.address = addressParts.join(" ");
+      else if (tags["addr:city"]) stay.address = tags["addr:city"];
       stays.push(stay);
       continue;
     }

@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState } from "react";
+import { createElement, use, useState } from "react";
 import Link from "next/link";
 import { Container } from "@/components/ui/Container";
 import { Badge } from "@/components/ui/Badge";
@@ -31,6 +31,7 @@ import { useFavorites } from "@/hooks/useFavorites";
 import { useAuth } from "@/hooks/useAuth";
 import { getCategoryIcon, getCategoryColor } from "@/constants/categories";
 import { LiveVisitorIntelligence } from "@/components/heritage/LiveVisitorIntelligence";
+import { ExternalReferences } from "@/components/heritage/ExternalReferences";
 
 /* ========================================
    Types
@@ -125,7 +126,9 @@ export default function HeritageDetailPage({
   const [galleryOpen, setGalleryOpen] = useState(false);
   const [galleryIndex, setGalleryIndex] = useState(0);
 
-  const Icon = getCategoryIcon(heritage?.category || "monument");
+  // Lowercase + createElement: getCategoryIcon returns a module-level icon
+  // component; avoids react-hooks/static-components false positive.
+  const categoryIcon = getCategoryIcon(heritage?.category || "monument");
   const colorClass = getCategoryColor(heritage?.category || "monument");
 
   return (
@@ -277,7 +280,7 @@ export default function HeritageDetailPage({
                   {/* Category */}
                   <div className="flex items-center gap-3 p-4 bg-cream/50 rounded-xl">
                     <div className={`flex h-10 w-10 items-center justify-center rounded-xl ${colorClass}`}>
-                      <Icon className="h-5 w-5" />
+                      {createElement(categoryIcon, { className: "h-5 w-5" })}
                     </div>
                     <div>
                       <p className="text-xs text-muted uppercase tracking-wider">Category</p>
@@ -496,6 +499,9 @@ export default function HeritageDetailPage({
                           {heritage.source.publication_date && (
                             <p>Published: {heritage.source.publication_date}</p>
                           )}
+                          {heritage.source.retrieved_date && (
+                            <p>Retrieved: {heritage.source.retrieved_date}</p>
+                          )}
                         </div>
                         {heritage.source.url && (
                           <a
@@ -510,6 +516,9 @@ export default function HeritageDetailPage({
                       </div>
                     </div>
                   </div>
+
+                  {/* External open-data references (Feature H, PARTIAL — proposals only) */}
+                  <ExternalReferences heritageId={heritage.id} />
                 </div>
               </div>
             )}

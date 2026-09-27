@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Container } from "@/components/ui/Container";
 import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -8,7 +9,8 @@ import { Sparkles, Globe, Database, MapPin, Wrench } from "lucide-react";
 
 function AIPageContent() {
   const { data: heritage } = useApi<Array<{ id: string }>>("/heritage");
-  const heritageCount = heritage?.length ?? 74;
+  // Live count only — show a placeholder instead of a stale number while loading.
+  const heritageCount = heritage?.length;
 
   return (
     <div className="py-8 sm:py-12">
@@ -29,7 +31,7 @@ function AIPageContent() {
               <Globe className="h-3 w-3 mr-1" /> 6 Languages
             </Badge>
             <Badge variant="secondary" className="bg-terracotta-mist text-stone border-cream">
-              <Database className="h-3 w-3 mr-1" /> {heritageCount} Heritage Records
+              <Database className="h-3 w-3 mr-1" /> {heritageCount ?? "—"} Heritage Records
             </Badge>
             <Badge variant="outline" className="border-cream text-stone">
               <MapPin className="h-3 w-3 mr-1" /> 12 States
@@ -68,9 +70,9 @@ function AIPageContent() {
               </div>
               <p className="text-xs text-warm-gray">
                 In the meantime, explore our{' '}
-                <a href="/explore" className="text-terracotta hover:underline">heritage collection</a>,{' '}
-                <a href="/timeline" className="text-terracotta hover:underline">timeline</a>, and{' '}
-                <a href="/collections" className="text-terracotta hover:underline">curated collections</a>.
+                <Link href="/explore" className="text-terracotta hover:underline">heritage collection</Link>,{' '}
+                <Link href="/timeline" className="text-terracotta hover:underline">timeline</Link>, and{' '}
+                <Link href="/collections" className="text-terracotta hover:underline">curated collections</Link>.
               </p>
             </CardContent>
           </Card>

@@ -9,6 +9,7 @@ Companion documents: `HERITAGE-VISIT-INTELLIGENCE-IMPLEMENTATION-REPORT.md` (26-
 
 ```
 frontend/app/heritage/[id]/page.tsx
+ ├── components/heritage/ExternalReferences.tsx        ← sources provenance (Feature H surface)
  └── components/heritage/LiveVisitorIntelligence.tsx   ← GET /visitor-intelligence
       ├── components/heritage/VisitCostEstimator.tsx   ← GET /visit-cost
       └── components/heritage/NearbyExplorer.tsx       ← GET /nearby
@@ -17,6 +18,9 @@ backend/src/routes/heritage.ts
  ├── GET /:id/visitor-intelligence  → services/visitorIntelligence.ts → Open-Meteo ×2
  ├── GET /:id/nearby                → services/nearby.ts             → own DB + Overpass
  └── GET /:id/visit-cost            → services/visitCostEstimator.ts → local model
+
+backend/src/services/providers.ts    ← ProviderMeta registry + shared fetchJson (timeout + JSON guard)
+backend/src/services/enrichment.ts   ← Feature H stateless Wikidata proposals (never writes DB)
 
 cross-cutting: middleware/apiKey (requireDevelopmentApiKey),
                middleware/rateLimit (30 / 20 / 60 per 10 min per IP),
@@ -32,12 +36,14 @@ cross-cutting: middleware/apiKey (requireDevelopmentApiKey),
 
 Requests issued for weather + air quality run in parallel via `Promise.allSettled`, so one provider failing never blocks the other.
 
+Provider metadata (name, purpose, license, attribution/terms URLs) lives in `backend/src/services/providers.ts` as `ProviderMeta` records, so attribution shown in the UI is data-driven rather than hard-coded, and swapping a provider means re-pointing one import. Every external request shares `fetchJson` (timeout + JSON-shape guard), so a slow or malformed payload degrades into a caught error instead of a crash.
+
 ## 3. Key algorithms
 
 ### 3.1 Best time to visit (`buildRecommendation`)
 1. Convert provider wall-clock strings to absolute instants: naive strings are parsed as UTC and **minus** `utc_offset_seconds` (the offset-sign bug fixed on 2026-09-27); zoned strings parse directly.
 2. Candidate pool ladder: **future (≤48 h) + daylight (`is_day=1`)** → future (any) → all hours (fallback ⇒ `confidence: "low"` if chosen hour is past).
-3. Score each hour 0–90: temperature 0–25 (18–30 °C band optimal), rain probability 0–20 (≤20 %), UV 0–20 (≤5), wind 0–15 (≤20 km/h), daylight +10/+4.
+3. Score each hour 0–90 from **nine inputs** (weights sum to 90): temperature 0–18 (comfort band via `scoreTemperature`), apparent temperature 0–7, relative humidity 0–8 (30–60 % optimal), rain probability 0–12 (≤20 %), precipitation amount 0–5, UV index 0–12 (≤5), wind speed 0–8 (≤20 km/h), air quality 0–10 (US AQI for that hour via `aqiByTime`; neutral credit when absent), daylight 0–10 (`is_day=1`). Missing inputs receive neutral partial credit — never a fabricated value — and each credited input adds a human-readable reason so the user can see which of the nine drove the pick.
 4. Pick the max; window = that hour → +3 h, labelled with **Today/Tomorrow/weekday** computed in the provider's wall clock; reasons list capped at 4 (appends "daylight hours").
 5. Confidence from pool size: ≥12 high, ≥4 moderate, else low.
 
@@ -114,17 +120,18 @@ Rejects `null`/`undefined`/`""` (JS `Number(null) === 0` was the Null Island roo
 
 - 15 content tables + the `_migrations` bookkeeping table (16 total in `information_schema.tables`), 19 FKs, indexes on heritage slug/name/location/category/source and locations slug/state/type.
 - Migrations: **30/30 applied** (0 pending), including `030_p1_authoritative_sources.sql` recorded as applied by the project runner.
-- `heritage_entities`: 96 rows post-migration (74 before); `locations`: 54 (54/54 with coordinates); `sources`: 22 (18 before); `relationships`: 49; `media`: 72; `collections`: 6; `collection_items`: 98; `users`: 5 (audit test account removed); `user_favorites`: 7 (audit favorite removed).
+- `heritage_entities`: 96 rows post-migration (74 before); `locations`: 54 (54/54 with coordinates); `sources`: 22 (18 before); `relationships`: 49; `media`: 72; `collections`: 6; `collection_items`: 98; `users`: 7; `user_favorites`: 8 (temp QA accounts from the admin-session test were created and deleted again; counts re-verified after cleanup).
 - 32/96 entities have `location_id IS NULL` → these now correctly get `location_unavailable` (previously served (0,0) weather).
 - 14 entities linked to UNESCO ICH source after migration 030.
 
-## 7b. Verification results (final pre-commit run)
+## 7b. Verification results (final run, 2026-09-27 second session)
 
-- Backend TypeScript: exit 0 · Frontend TypeScript: exit 0 · Backend build: exit 0 · Frontend production build: exit 0 (13/13 pages).
-- `test-visitor-intelligence.js`: **7/7 passed** (includes future-only + daylight + timezone-offset regression cases).
+- Backend TypeScript: exit 0 · Frontend TypeScript: exit 0 · Backend build: exit 0 · Frontend production build: exit 0 (13/13 pages) · ESLint (`--quiet`, changed files): 0 errors.
+- `test-visitor-intelligence.js`: **10/10 passed** (daylight/future/offset regressions plus malformed-payload guards and hourly-AQI scoring).
+- `test-enrichment.js`: **4/4 passed** (Feature H extract → normalize → duplicate/conflict detection; never writes).
 - `test-visit-module.js`: **16/16 passed** (cost clamping, haversine, same-location handling, situation honesty).
-- `db-audit.js`: **34 checks, 0 failures**.
-- Feature H (trusted-source provenance): **PARTIAL** — existing `sources` provenance + verification status surfaced, migration 030 added four authoritative sources; automated normalize → conflict → approval pipeline remains deferred.
+- `db-audit.js`: **34 checks, 0 failures** (heritage 96, locations 54, media 72, sources 22, users 7).
+- Feature H (trusted-source provenance): **PARTIAL** — `sources` provenance + verification status surfaced, migration 030 added four authoritative sources, and a stateless Wikidata proposal service (`enrichment.ts`) with full provenance now exists; automated approval → DB-write pipeline remains deferred (by design, never fabricated).
 - Heritage status: always `information_unavailable` without a trusted live source (deliberate; no fabricated open/closed states).
 - Hotel room prices / availability / ratings: **not implemented** (OpenStreetMap name/distance/website/phone only).
 

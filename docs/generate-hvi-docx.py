@@ -104,12 +104,12 @@ table(
     [
         ["A — Live environment", "Open-Meteo (forecast + air quality)", "Current/hourly/daily weather, UV, humidity, wind, rain chance, cloud cover, sunrise/sunset; US AQI with standard bands, PM2.5/PM10/O3/NO2/CO/dust; source, retrieved time, current indicator, unavailable states"],
         ["B — Heritage situation", "none (honest state)", "Structured states modelled (open/closed/restricted/maintenance/unavailable); always 'Current status unavailable' until a trusted live source exists"],
-        ["C — Best time to visit", "Astrova model over Open-Meteo", "Explainable 0–90 score over FUTURE DAYLIGHT hours (48h horizon), Today/Tomorrow label, reasons, confidence; labelled 'Astrova recommendation'"],
+        ["C — Best time to visit", "Astrova model over Open-Meteo", "Explainable 0–90 score over FUTURE DAYLIGHT hours (48h horizon) from NINE inputs (temperature, feels-like, humidity, rain probability, precipitation, UV, wind, hourly AQI, daylight), Today/Tomorrow label, reasons, confidence; labelled 'Astrova recommendation'"],
         ["D — Cost estimator", "Astrova model rate card", "visitors/duration/transport/food/stay/guide/parking/misc → min/typical/max INR + category breakdown; every line provenance='astrova_model'; officialFee always null"],
         ["E — Nearby heritage", "Astrova DB (locations)", "haversine over own coordinates, top 8, category + location + detail link"],
         ["F — Nearby places", "OpenStreetMap / Overpass", "3km radius: culture, attractions, food, parks, parking, transport; named records only; no ratings/prices/availability"],
         ["G — Stay nearby", "OpenStreetMap / Overpass", "hotels/guest houses/hostels; name, kind, distance, website/phone/stars only when present in source"],
-        ["H — Trusted heritage data", "sources table + migration 030", "Provenance with verification_status (VERIFIED/REVIEWED), publisher, URL; 4 authoritative sources registered; automated ingestion pipeline PLANNED"],
+        ["H — Trusted heritage data", "sources table + migration 030 + Wikidata (CC0)", "Provenance with verification_status (VERIFIED/REVIEWED), publisher, URL; 4 authoritative sources registered; stateless proposal pipeline (enrichment.ts: extract → normalize → duplicate/conflict detection, never writes) IMPLEMENTED; automated approval pipeline PLANNED"],
     ],
 )
 
@@ -154,6 +154,7 @@ table(
         ["Open-Meteo Forecast", "Weather, UV, sunrise/sunset", "Free non-commercial API; CC BY 4.0 — shown in UI", "5s timeout, stale reuse, errors[], no failure caching"],
         ["Open-Meteo Air Quality", "AQI + pollutants", "CC BY 4.0 — shown in UI", "Same isolation; other provider unaffected"],
         ["Overpass API (OpenStreetMap)", "Nearby places and stays", "ODB L — © OpenStreetMap contributors (UI footer)", "15s timeout, fallback mirror, heritage stays available, explicit error/stale state"],
+        ["Wikidata", "Feature H enrichment proposals", "CC0 1.0 — keyless, polite rate limits; provenance on every proposal", "5s timeout, low-confidence matches rejected; never writes to Astrova data"],
         ["Astrova heritage database", "Nearby heritage, coordinates", "Own data (location-level)", "n/a"],
     ],
 )
@@ -175,7 +176,8 @@ h1("9. Testing")
 table(
     ["Suite", "Result"],
     [
-        ["test-visitor-intelligence.js (recommendation regressions)", "7/7 PASS"],
+        ["test-visitor-intelligence.js (recommendations, malformed payloads, hourly AQI)", "10/10 PASS"],
+        ["test-enrichment.js (Feature H proposal pipeline)", "4/4 PASS"],
         ["test-visit-module.js (cost, haversine, Overpass normalization)", "16/16 PASS"],
         ["db-audit.js (live database)", "34/34 PASS"],
         ["Migrations", "30/30 applied"],
@@ -221,9 +223,9 @@ table(
         ["Connectivity audit + fixes", "VERIFIED (34/34 DB, full API matrix, builds)"],
         ["Features A, C, D, E, F, G", "IMPLEMENTED & VERIFIED end-to-end"],
         ["Feature B (situation)", "IMPLEMENTED (honest unavailable state); live-status source PLANNED"],
-        ["Feature H (trusted data)", "PARTIAL — provenance in place; ingestion pipeline PLANNED"],
-        ["Regression suite", "PASS"],
-        ["Git", "branch main · working tree modified · NO commit · NO push"],
+        ["Feature H (trusted data)", "PARTIAL (advanced) — provenance + ExternalReferences UI + stateless Wikidata proposals (4/4); approval/DB-write pipeline PLANNED"],
+        ["Regression suite", "PASS (second session: 10/10 + 4/4 + 16/16 + 34/34; tsc/eslint/builds green)"],
+        ["Git", "branch main · new commit on top of dfc48eb · pushed to https://github.com/tirthshah0201/Asrtova.git (see report.md GitHub Status)"],
     ],
 )
 

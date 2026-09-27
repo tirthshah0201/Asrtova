@@ -114,6 +114,17 @@ export const loginRateLimit = rateLimit({
   message: "Too many login attempts. Please try again in 15 minutes.",
 });
 
+/** Admin login: 5 attempts per 15 minutes per IP (separate bucket from site login) */
+export const adminLoginRateLimit = rateLimit({
+  maxRequests: 5,
+  windowMs: 15 * 60 * 1000,
+  keyFn: (req) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    return `admin-login:${ip}`;
+  },
+  message: "Too many admin login attempts. Please try again in 15 minutes.",
+});
+
 /** Register: 3 accounts per hour per IP */
 export const registerRateLimit = rateLimit({
   maxRequests: 3,
@@ -167,6 +178,17 @@ export const nearbyRateLimit = rateLimit({
     return `nearby:${ip}`;
   },
   message: "Too many nearby-place requests. Please try again later.",
+});
+
+/** Heritage enrichment references (proxies Wikidata): 20 requests per 10 minutes per IP */
+export const enrichmentRateLimit = rateLimit({
+  maxRequests: 20,
+  windowMs: 10 * 60 * 1000,
+  keyFn: (req) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    return `enrichment:${ip}`;
+  },
+  message: "Too many external-reference requests. Please try again later.",
 });
 
 /** Visit cost estimator (local calculation): 60 requests per 10 minutes per IP */

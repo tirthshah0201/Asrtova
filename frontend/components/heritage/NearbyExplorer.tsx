@@ -1,6 +1,6 @@
 "use client";
 
-import { BedDouble, Bus, Camera, Compass, Info, Landmark, MapPin, RefreshCw, Trees, UtensilsCrossed, Car } from "lucide-react";
+import { BedDouble, Bus, Camera, Compass, Droplet, Info, Landmark, MapPin, RefreshCw, Trees, UtensilsCrossed, Car } from "lucide-react";
 import Link from "next/link";
 import { useApi } from "@/hooks/useApi";
 
@@ -22,7 +22,7 @@ interface NearbyHeritageItem {
   distanceKm: number;
 }
 
-type PlaceCategory = "culture" | "food" | "park" | "parking" | "transport" | "attraction";
+type PlaceCategory = "culture" | "food" | "park" | "parking" | "transport" | "attraction" | "facility";
 
 interface NearbyPlaceItem {
   name: string;
@@ -42,6 +42,7 @@ interface NearbyStayItem {
   website?: string;
   phone?: string;
   stars?: number;
+  address?: string;
 }
 
 interface NearbyData {
@@ -70,6 +71,7 @@ const CATEGORY_META: Record<PlaceCategory, { label: string; Icon: typeof Landmar
   park: { label: "Parks", Icon: Trees },
   parking: { label: "Parking", Icon: Car },
   transport: { label: "Transport", Icon: Bus },
+  facility: { label: "Public facilities", Icon: Droplet },
 };
 
 function distanceLabel(km: number): string {
@@ -141,7 +143,9 @@ export function NearbyExplorer({
         )}
 
         {nearby && !error && (
-          <div className="grid gap-6 lg:grid-cols-2">
+          /* grid-cols-1 => minmax(0,1fr): keeps long OSM place names from
+             inflating the implicit auto track and overflowing on mobile */
+          <div className="grid grid-cols-1 gap-6 lg:grid-cols-2">
             {/* ---- E: Nearby heritage (Astrova's own data) ---- */}
             <div>
               <h4 className="mb-3 flex items-center gap-2 text-sm font-semibold uppercase tracking-wider text-charcoal">
@@ -254,6 +258,9 @@ export function NearbyExplorer({
                         <span className="shrink-0 text-xs text-terracotta">{distanceLabel(stay.distanceKm)}</span>
                       </div>
                       <p className="mt-0.5 text-[11px] capitalize text-muted">{stay.kind.replace(/_/g, " ")}</p>
+                      {stay.address && (
+                        <p className="mt-0.5 text-[11px] text-muted">{stay.address}</p>
+                      )}
                       <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 text-xs">
                         {stay.website && (
                           <a

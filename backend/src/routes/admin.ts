@@ -14,6 +14,7 @@ import { requireDatabase } from "../database/helpers";
 import { isValidUUID } from "../utils/validation";
 import { isValidSlug } from "../utils/slug";
 import { generateToken, setAuthCookie, optionalAuth } from "../middleware/auth";
+import { adminLoginRateLimit } from "../middleware/rateLimit";
 import { uploadMedia, getMediaUrl, deleteMediaFile, extractFilenameFromUrl, getMediaType } from "../utils/upload";
 
 const router = Router();
@@ -26,7 +27,7 @@ const router = Router();
  * POST /api/admin/auth/login
  * Admin username + password authentication.
  */
-router.post("/auth/login", async (req, res) => {
+router.post("/auth/login", adminLoginRateLimit, async (req, res) => {
   try {
     const { username, password } = req.body;
 
@@ -39,7 +40,7 @@ router.post("/auth/login", async (req, res) => {
       return;
     }
 
-    // Find user by email (username = email for admin)
+    // Find user by email (username = email for admin); trim + case-insensitive
     const { rows } = await query<{
       id: string;
       name: string;
@@ -48,8 +49,8 @@ router.post("/auth/login", async (req, res) => {
       password_hash: string;
       token_version: number | string | null;
     }>(
-      "SELECT id, name, email, role, password_hash, token_version FROM users WHERE email = $1",
-      [username]
+      "SELECT id, name, email, role, password_hash, token_version FROM users WHERE LOWER(email) = LOWER($1)",
+      [String(username).trim()]
     );
 
     if (rows.length === 0) {
@@ -680,13 +681,21 @@ router.delete("/media/:id", async (req, res) => {
       return;
     }
 
-    const { rows: existing } = await query("SELECT id FROM media WHERE id = $1", [id]);
+    const { rows: existing } = await query<{ id: string; url: string }>("SELECT id, url FROM media WHERE id = $1", [id]);
     if (existing.length === 0) {
       res.status(404).json({ success: false, error: { code: "NOT_FOUND", message: "Media record not found" } });
       return;
     }
 
     await query("DELETE FROM media WHERE id = $1", [id]);
+
+    // Remove the physical file for platform-hosted uploads only.
+    // extractFilenameFromUrl returns null for external / frontend-asset URLs.
+    const uploadedFile = extractFilenameFromUrl(existing[0].url);
+    if (uploadedFile) {
+      deleteMediaFile(uploadedFile);
+    }
+
     res.json({ success: true, message: "Media deleted" });
   } catch (err) {
     res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Failed to delete media" } });
@@ -1100,10 +1109,34 @@ router.delete("/users/:id", async (req, res) => {
       return;
     }
 
-    const { rows: existing } = await query("SELECT id, name, email FROM users WHERE id = $1", [id]);
+    const { rows: existing } = await query("SELECT id, name, email, role FROM users WHERE id = $1", [id]);
     if (existing.length === 0) {
       res.status(404).json({ success: false, error: { code: "NOT_FOUND", message: "User not found" } });
       return;
+    }
+
+    // Guard: admins cannot delete their own account (prevents accidental lockout)
+    const requester = req.user as { id: string; email: string } | undefined;
+    if (requester && requester.id === id) {
+      res.status(400).json({
+        success: false,
+        error: { code: "SELF_DELETE", message: "You cannot delete your own admin account." },
+      });
+      return;
+    }
+
+    // Guard: never remove the last admin (keeps the admin portal reachable)
+    if (existing[0].role === "admin") {
+      const { rows: adminCount } = await query<{ n: string }>(
+        "SELECT COUNT(*)::text AS n FROM users WHERE role = 'admin'"
+      );
+      if (Number(adminCount[0]?.n ?? 0) <= 1) {
+        res.status(400).json({
+          success: false,
+          error: { code: "LAST_ADMIN", message: "Cannot delete the last remaining admin account." },
+        });
+        return;
+      }
     }
 
     // BUG-007 fix: require explicit destructive confirmation tied to the exact

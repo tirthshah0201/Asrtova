@@ -17,9 +17,11 @@ import {
   visitorIntelligenceRateLimit,
   nearbyRateLimit,
   visitCostRateLimit,
+  enrichmentRateLimit,
 } from "../middleware/rateLimit";
 import { getNearbyForEntity, isValidEntityId } from "../services/nearby";
 import { estimateVisitCost, normalizeCostInput } from "../services/visitCostEstimator";
+import { getEnrichment } from "../services/enrichment";
 
 const router = Router();
 
@@ -351,6 +353,73 @@ router.get(
         error: {
           code: "VISIT_COST_UNAVAILABLE",
           message: "Cost estimation is temporarily unavailable.",
+        },
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/heritage/:id/enrichment
+ *
+ * Trusted-source enrichment (Feature H, PARTIAL): extracts candidate facts
+ * from Wikidata, normalizes them, and runs duplicate/conflict detection.
+ * Never writes to Astrova data — proposals stay pending human review.
+ */
+router.get(
+  "/:id/enrichment",
+  requireDevelopmentApiKey,
+  enrichmentRateLimit,
+  async (req, res) => {
+    if (!requireDatabase(res)) return;
+    try {
+      const identifier = String(req.params.id);
+      if (!isValidEntityId(identifier)) {
+        res.status(404).json({
+          success: false,
+          error: { code: "HERITAGE_NOT_FOUND", message: "Heritage entity not found." },
+        });
+        return;
+      }
+      const lookup = isValidSlug(identifier) && !isUUID(identifier) ? "slug" : "id";
+      const { rows } = await query<{
+        id: string;
+        name: string;
+        slug: string;
+        latitude: number | string | null;
+        longitude: number | string | null;
+      }>(
+        // No wikidata_id column exists yet (schema unchanged this phase);
+        // duplicate detection therefore relies on name/coordinate matching.
+        `SELECT he.id, he.name, he.slug, l.latitude, l.longitude
+         FROM heritage_entities he
+         LEFT JOIN locations l ON he.location_id = l.id
+         WHERE he.${lookup} = $1`,
+        [identifier]
+      );
+      if (rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          error: { code: "HERITAGE_NOT_FOUND", message: "Heritage entity not found." },
+        });
+        return;
+      }
+      const row = rows[0];
+      const result = await getEnrichment({
+        name: row.name,
+        slug: row.slug,
+        wikidataId: null,
+        latitude: row.latitude == null ? null : Number(row.latitude),
+        longitude: row.longitude == null ? null : Number(row.longitude),
+      });
+      res.json({ success: true, data: result });
+    } catch (err) {
+      console.error("[Enrichment] Error:", (err as Error).message);
+      res.status(502).json({
+        success: false,
+        error: {
+          code: "ENRICHMENT_UNAVAILABLE",
+          message: "External references are temporarily unavailable.",
         },
       });
     }

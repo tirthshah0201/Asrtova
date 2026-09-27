@@ -42,9 +42,12 @@ async function proxyRequest(
   const searchParams = request.nextUrl.searchParams.toString();
   const url = `${BACKEND_URL}${backendPath}${searchParams ? `?${searchParams}` : ""}`;
 
-  // Forward request to backend with API key
+  // Forward request to backend with API key.
+  // Preserve the caller's content-type (e.g. multipart/form-data with its
+  // boundary) instead of forcing JSON — otherwise file uploads break.
+  const contentType = request.headers.get("content-type") || "application/json";
   const headers = new Headers();
-  headers.set("Content-Type", "application/json");
+  headers.set("Content-Type", contentType);
   headers.set("X-API-Key", API_KEY);
 
   // Forward authorization if present
@@ -59,14 +62,23 @@ async function proxyRequest(
     headers.set("Cookie", cookieHeader);
   }
 
+  // Text bodies (JSON / urlencoded / empty) pass through as text;
+  // anything else (multipart, binary) is forwarded as raw bytes.
+  const isTextBody =
+    contentType.includes("application/json") ||
+    contentType.includes("application/x-www-form-urlencoded") ||
+    contentType === "";
+
   try {
+    const bodyMethod = request.method !== "GET" && request.method !== "HEAD";
     const response = await fetch(url, {
       method: request.method,
       headers,
-      body:
-        request.method !== "GET" && request.method !== "HEAD"
+      body: bodyMethod
+        ? isTextBody
           ? await request.text()
-          : undefined,
+          : await request.arrayBuffer()
+        : undefined,
     });
 
     // Get response body

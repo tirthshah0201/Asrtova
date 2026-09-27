@@ -109,4 +109,55 @@ assert.strictEqual(
   "6 future hours should classify as moderate confidence"
 );
 
-console.log("Visitor intelligence checks: 7/7 passed");
+/* 8. New scoring inputs: hourly AQI must influence which hour wins.
+ * Two otherwise-identical future daylight hours; only AQI differs. */
+const goodAirHour = hour(hoursFromNow(4));
+const badAirHour = hour(hoursFromNow(5));
+const aqiGood = { [goodAirHour.time]: 30 };   // good AQI on hour A
+const aqiBad = { [badAirHour.time]: 180 };    // hazardous AQI on hour B
+const aqiMap = { ...aqiGood, ...aqiBad };
+const airPick = buildRecommendation([goodAirHour, badAirHour], 0, aqiMap);
+assert(airPick, "AQI-scored forecast should produce a recommendation");
+const goodLabel = (() => {
+  const t = String(goodAirHour.time).slice(11, 16);
+  const h = Number(t.slice(0, 2));
+  return `${h % 12 === 0 ? 12 : h % 12}:${t.slice(3)}`;
+})();
+assert(
+  airPick.bestWindow.includes(goodLabel),
+  `the cleaner-air hour must win when AQI differs (${airPick.bestWindow})`
+);
+assert(
+  airPick.reasons.some((r) => r.includes("air quality")),
+  "good AQI should be surfaced as a reason"
+);
+
+/* 9. Humidity input: a humid hour loses to a comfortable one when all
+ * other fields are equal (humidity is now a scored input). */
+const dryHour = hour(hoursFromNow(4), { relativeHumidity: 45 });
+const humidHour = hour(hoursFromNow(5), { relativeHumidity: 92 });
+const humidityPick = buildRecommendation([dryHour, humidHour], 0);
+assert(humidityPick, "humidity-scored forecast should produce a recommendation");
+const dryLabel = (() => {
+  const t = String(dryHour.time).slice(11, 16);
+  const h = Number(t.slice(0, 2));
+  return `${h % 12 === 0 ? 12 : h % 12}:${t.slice(3)}`;
+})();
+assert(
+  humidityPick.bestWindow.includes(dryLabel),
+  `comfortable-humidity hour must beat 92% humidity (${humidityPick.bestWindow})`
+);
+
+/* 10. Score ceiling holds with every input present. */
+const fullyLoaded = buildRecommendation(
+  [hour(hoursFromNow(3), { relativeHumidity: 45, apparentTemperature: 24, precipitation: 0 })],
+  0,
+  { [hour(hoursFromNow(3)).time]: 25 }
+);
+assert(fullyLoaded, "fully-loaded hour should score");
+assert(
+  fullyLoaded.score <= 90 && fullyLoaded.score > 60,
+  `fully-loaded score within 0–90 (got ${fullyLoaded.score})`
+);
+
+console.log("Visitor intelligence checks: 10/10 passed");

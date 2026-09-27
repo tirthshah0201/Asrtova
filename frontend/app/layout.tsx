@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Playfair_Display, Manrope, Geist_Mono } from "next/font/google";
-import { Navbar } from "@/components/layout/Navbar";
-import { Footer } from "@/components/layout/Footer";
+import { SiteChrome } from "@/components/layout/SiteChrome";
 import { SearchModalProvider } from "@/components/ui/SearchModal";
 import { AuthProvider } from "@/hooks/useAuth";
 import "./globals.css";
@@ -58,9 +57,7 @@ export default function RootLayout({
       <body className="min-h-full flex flex-col">
         <AuthProvider>
           <SearchModalProvider>
-            <Navbar />
-            <main className="flex-1">{children}</main>
-            <Footer />
+            <SiteChrome>{children}</SiteChrome>
           </SearchModalProvider>
         </AuthProvider>
       </body>

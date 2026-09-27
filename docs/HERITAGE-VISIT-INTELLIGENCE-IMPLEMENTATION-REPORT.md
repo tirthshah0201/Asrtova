@@ -80,8 +80,11 @@ See §6 — each defect was traced to its cause (SQL string escaping semantics, 
 | `backend/src/routes/heritage.ts` | added `GET /:id/nearby`, `GET /:id/visit-cost` |
 | `backend/src/middleware/rateLimit.ts` | added `nearbyRateLimit` (20/10min), `visitCostRateLimit` (60/10min) |
 | `frontend/components/heritage/LiveVisitorIntelligence.tsx` | full section: conditions + AQI + situation + best time + forecast + embedded cost/nearby |
-| `frontend/app/heritage/[id]/page.tsx` | section moved after Related Heritage (spec order) |
+| `frontend/app/heritage/[id]/page.tsx` | section moved after Related Heritage (spec order); `ExternalReferences` surface added under Sources & References |
+| `frontend/components/heritage/NearbyExplorer.tsx` | Features E/F/G UI + mobile overflow fix (`grid-cols-1 lg:grid-cols-2`, `minmax(0,1fr)`) |
 | `frontend/app/explore/page.tsx` | Suspense boundary (build fix) |
+| `backend/src/services/providers.ts` (created, then extended) | `ProviderMeta` registry + shared `fetchJson` boundary for all providers |
+| `backend/src/middleware/rateLimit.ts` | added `nearbyRateLimit`, `visitCostRateLimit` (and, outside this module, `adminLoginRateLimit` in the admin session) |
 | `PRD.md`, `report.md` | status/documentation updates |
 
 ## 10. Files created
@@ -93,7 +96,11 @@ See §6 — each defect was traced to its cause (SQL string escaping semantics, 
 | `frontend/components/heritage/VisitCostEstimator.tsx` | Feature D UI |
 | `frontend/components/heritage/NearbyExplorer.tsx` | Features E/F/G UI |
 | `backend/tests/test-visit-module.js` | 16 unit checks (cost, haversine, Overpass normalization) |
-| `backend/tests/test-visitor-intelligence.js` | extended to 7 checks (daylight/future/offset regressions) |
+| `backend/tests/test-visitor-intelligence.js` | extended to **10 checks** (daylight/future/offset regressions, malformed-payload guards, hourly-AQI scoring) |
+| `backend/src/services/providers.ts` | ProviderMeta registry (name/purpose/license/attribution/terms) + shared `fetchJson` timeout/JSON guard |
+| `backend/src/services/enrichment.ts` | Feature H stateless Wikidata proposal service — extract → normalize → duplicate/conflict detection with full provenance; **never writes to `heritage_entities`** |
+| `backend/tests/test-enrichment.js` | 4 unit checks for the enrichment pipeline |
+| `frontend/components/heritage/ExternalReferences.tsx` | source-provenance surface (links + verification status + retrieved dates) under Sources & References |
 | `backend/tests/db-audit.js` | reusable read-only DB connectivity audit |
 | `docs/HERITAGE-VISIT-INTELLIGENCE-IMPLEMENTATION-REPORT.md` | this report |
 | `docs/HERITAGE-VISIT-INTELLIGENCE-TECHNICAL-REPORT.md` | technical report |
@@ -125,8 +132,11 @@ Error contracts: 404 `HERITAGE_NOT_FOUND`, 401 without key, 429 rate limited, 50
 
 ## 14. Provider / license / source information
 
+All provider metadata is registered as `ProviderMeta` records in `backend/src/services/providers.ts`, so attribution in the UI is data-driven.
+
 - **Open-Meteo**: free non-commercial weather API, CC BY 4.0 data attribution — displayed in the UI footer and `sources[]`.
 - **OpenStreetMap / Overpass**: data © OpenStreetMap contributors, **ODbL** — displayed in the Nearby footer and `sources[]`.
+- **Wikidata** (Feature H enrichment): **CC0 1.0**, keyless, rate-limit-polite — proposals carry source name/URL/license/retrieved_at; nothing is presented as verified Astrova data.
 - **Astrova heritage database**: own data, distances labelled location-level.
 - **Cost figures**: Astrova model rate card (documented in `visitCostEstimator.ts`), labelled estimates — **not** externally sourced prices; `officialFee` always null.
 
@@ -134,7 +144,8 @@ Error contracts: 404 `HERITAGE_NOT_FOUND`, 401 without key, 429 rate limited, 50
 
 `heritage/[id]` page section order: Story → At a Glance → Explore the Place → Gallery → Sources & References → You May Also Explore → **Visitor Intelligence** → Ask Astrova (Under Construction) → Continue Exploring.
 
-- `LiveVisitorIntelligence` — conditions card (temp, feels-like, condition, humidity, wind, rain, cloud cover, UV, rain chance, sunrise/sunset, "Current · Open-Meteo"), AQI card (standard band label, AQI, PM2.5/PM10/O₃ in µg/m³), situation card, best-time card (score/90, confidence, reasons, "Astrova recommendation" + non-official disclaimer), 7-day forecast, attribution with retrieved time; loading skeletons, error+Retry, coordinate/provider unavailable states.
+- `LiveVisitorIntelligence` — conditions card (temp, feels-like, condition, humidity, wind, rain, cloud cover, UV, rain chance, sunrise/sunset, "Current · Open-Meteo"), AQI card (standard band label, AQI, PM2.5/PM10/O₃ in µg/m³), situation card, best-time card (score/90 from nine inputs incl. hourly AQI, confidence, reasons, "Astrova recommendation" + non-official disclaimer), 7-day forecast, attribution with retrieved time; loading skeletons, error+Retry, coordinate/provider unavailable states; malformed provider payloads degrade to honest partial data instead of crashing.
+- `ExternalReferences` — sources & provenance surface: source links, verification status and retrieved dates (22 rows backfilled), rendered under Sources & References.
 - `VisitCostEstimator` — 8 inputs, min/typical/max cards, category table with per-line basis, estimate disclaimers, error+Retry.
 - `NearbyExplorer` — nearby heritage (links, "same mapped location" note), places grouped by category with distance, stays with website/phone/stars-as-mapped, OSM ODbL attribution, unavailable states.
 - Astrova visual language preserved (terracotta/cream/charcoal/gold, rounded-2xl cards, `font-display` headings).
@@ -180,9 +191,10 @@ Measured `scrollWidth` vs `clientWidth` at **1440, 1280, 1024, 900, 768, 740, 72
 
 ## 22. Testing
 
-- `backend/tests/test-visitor-intelligence.js` — **7/7** (scoring, empty/partial forecasts, daylight preference, future preference with offset, past-only low-confidence fallback, IST offset sign regression).
+- `backend/tests/test-visitor-intelligence.js` — **10/10** (scoring incl. hourly-AQI input, empty/partial forecasts, malformed-payload guards, daylight preference, future preference with offset, past-only low-confidence fallback, IST offset sign regression).
+- `backend/tests/test-enrichment.js` — **4/4** (Feature H extract → normalize → duplicate/conflict detection; provenance completeness; no-write guarantee).
 - `backend/tests/test-visit-module.js` — **16/16** (cost ordering/clamping/officialFee null/provenance/overnight model, haversine known distances, Overpass dedupe/unnamed-drop/coordless-drop/stay split/no fabricated fields/category classification/sorting).
-- `backend/tests/db-audit.js` — **34/34**.
+- `backend/tests/db-audit.js` — **34/34** (heritage 96, locations 54, media 72, sources 22, users 7).
 - Live E2E per feature (browser + API): success, loading, empty, unavailable, partial provider failure, timeout, invalid input, missing coordinates, API failure, rate limit, auth boundary.
 
 ## 23. Regression testing
@@ -202,10 +214,10 @@ Verified after the changes: homepage · explore (search + Leaflet map) · herita
 
 ## 25. Deferred work
 
-- Trusted live-status ingestion for Feature B (Wikidata/Inheritage → normalize → duplicate/conflict detection → verification/approval → Astrova data) — architecture documented, pipeline PLANNED.
+- Trusted live-status ingestion for Feature B (Wikidata/Inheritage → normalize → duplicate/conflict detection → verification/approval → Astrova data) — architecture documented; extract/normalize/duplicate/conflict stages now implemented statelessly in `enrichment.ts`, approval + DB-write remain PLANNED.
 - Verified official fee sources for the cost estimator.
-- Feature H automated ingestion pipeline (currently provenance via `sources` only).
-- Wikidata/Commons enrichment of entity fields.
+- Feature H automated *approval* pipeline: proposals are produced with full provenance but never written to `heritage_entities` without human verification.
+- Deeper Wikidata/Commons enrichment of entity fields (current enrichment is proposal-only, review-gated).
 - Shared/distributed cache, provider circuit breakers, deeper hotel intelligence phase.
 
 ## 26. Final implementation status
@@ -215,13 +227,25 @@ Verified after the changes: homepage · explore (search + Leaflet map) · herita
 | Connectivity audit + fixes (incl. migration 030) | **VERIFIED** (34/34 DB, 34 API probes, auth chain, builds) |
 | Feature A — live environment | **IMPLEMENTED & VERIFIED** |
 | Feature B — heritage situation | **IMPLEMENTED** (honest unavailable state; status source PLANNED) |
-| Feature C — best time | **IMPLEMENTED & VERIFIED** (7/7 unit + live) |
+| Feature C — best time | **IMPLEMENTED & VERIFIED** (10/10 unit incl. hourly-AQI input + live) |
 | Feature D — cost estimator | **IMPLEMENTED & VERIFIED** (16/16 unit + live) |
 | Feature E — nearby heritage | **IMPLEMENTED & VERIFIED** |
 | Feature F — nearby places | **IMPLEMENTED & VERIFIED** |
 | Feature G — stays | **IMPLEMENTED & VERIFIED** |
-| Feature H — trusted data | **PARTIAL** (provenance in place; ingestion pipeline PLANNED) |
-| Regression suite | **PASS** |
+| Feature H — trusted data | **PARTIAL (advanced)** — provenance + `ExternalReferences` surface + stateless Wikidata proposals (`enrichment.ts`, 4/4 tests); approval/DB-write pipeline PLANNED |
+| Regression suite | **PASS** (second session: 10/10 + 4/4 + 16/16 + 34/34, builds + tsc + eslint green) |
 | Security / performance / responsive / a11y review | **PASS** (see §18–§21) |
-| Documentation (PRD, report, module + technical + Word reports) | **COMPLETE** |
-| Git | branch `main`, working tree modified, **no commit, no push** |
+| Documentation (PRD, report, module + technical + Word reports) | **COMPLETE** (regenerated after second session) |
+| Git | branch `main`; these changes committed as a NEW commit on top of `dfc48eb` and pushed to `https://github.com/tirthshah0201/Asrtova.git` |
+
+## 27. Second-session delta (2026-09-27, later session)
+
+Scope of the follow-up session as it affects this module:
+
+1. **Provider boundary** — introduced `providers.ts` (`ProviderMeta` + shared `fetchJson`) so every external value carries data-driven attribution and malformed payloads degrade gracefully.
+2. **Feature H (stateless half)** — `enrichment.ts` implements extract → normalize → duplicate detection → conflict detection against Wikidata (CC0), scoring matches and rejecting low-confidence ones; it never writes to `heritage_entities`. `ExternalReferences.tsx` surfaces source provenance (links, verification status, `retrieved_date` backfilled for 22 rows) on the detail page.
+3. **Best-time scoring** — moved to nine documented inputs (temperature, apparent temperature, humidity, rain probability, precipitation amount, UV, wind, hourly AQI, daylight; weights sum to 90) with malformed-payload guards and honest stale-cache labelling.
+4. **Nearby/stays polish** — nearby facility category filter, stay address field, and the mobile overflow fix in `NearbyExplorer` (re-verified across all 10 widths).
+5. **Verification refresh** — `test-visitor-intelligence` 7/7 → **10/10**, new `test-enrichment` **4/4**, `test-visit-module` **16/16**, `db-audit` **34/34**, backend+frontend tsc/build/eslint green, browser regression + a11y + security spot checks PASS.
+
+Not changed: AI chatbot (still Under Construction), heritage situation honesty, cost `officialFee: null`, no hotel prices/ratings, no RAG/crowd/conservation features.

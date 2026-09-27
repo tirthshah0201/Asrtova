@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { motion, useScroll, useTransform } from "motion/react";
-import { useRef, useState } from "react";
+import { useRef, useState, useMemo } from "react";
 import { Container } from "@/components/ui/Container";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -145,6 +145,18 @@ export default function HomePage() {
   const { data: heritage, loading: heritageLoading, error: heritageError } =
     useApi<HeritageEntity[]>("/heritage");
   const { data: collections } = useApi<Collection[]>("/collections");
+  // Live per-state heritage counts (same source the explore page uses).
+  // Plain record — the lucide `Map` icon import shadows the Map constructor.
+  const { data: stateCounts } = useApi<
+    Array<{ state: string; heritage_count: number }>
+  >("/heritage/state-counts");
+  const stateCountMap = useMemo(() => {
+    const counts: Record<string, number> = {};
+    stateCounts?.forEach((s) => {
+      counts[s.state] = s.heritage_count;
+    });
+    return counts;
+  }, [stateCounts]);
 
   const heroRef = useRef<HTMLDivElement>(null);
   const { scrollYProgress } = useScroll({
@@ -159,13 +171,17 @@ export default function HomePage() {
   const featuredHeritage = heritage?.slice(0, 6) ?? [];
   const displayedStates = showAllStates ? INDIAN_STATES : INDIAN_STATES.slice(0, 4);
   const totalStates = INDIAN_STATES.length;
-  const totalHeritageSites = INDIAN_STATES.reduce((sum, s) => sum + s.heritageCount, 0);
+  // Live counts from the loaded dataset — never a hardcoded/stale number.
+  const totalHeritageSites = heritage ? heritage.length : null;
+  const totalCategories = heritage
+    ? new Set(heritage.map((h) => h.category)).size
+    : null;
 
   const stats = [
     { value: totalStates, label: "States Covered", suffix: "", href: "/explore" },
     { value: totalHeritageSites, label: "Heritage Records", suffix: "", href: "/heritage" },
     { value: 6, label: "Languages", suffix: "", href: null },
-    { value: 9, label: "Heritage Categories", suffix: "", href: "/heritage" },
+    { value: totalCategories, label: "Heritage Categories", suffix: "", href: "/heritage" },
   ];
 
   return (
@@ -311,14 +327,14 @@ export default function HomePage() {
                 {stat.href ? (
                   <Link href={stat.href} className="block group">
                     <div className="font-display text-3xl sm:text-4xl text-terracotta group-hover:text-terracotta-dark transition-colors">
-                      <CountUp target={stat.value} suffix={stat.suffix} />
+                      {stat.value !== null ? <CountUp target={stat.value} suffix={stat.suffix} /> : "—"}
                     </div>
                     <p className="text-xs text-stone mt-1 font-medium uppercase tracking-wider group-hover:text-charcoal transition-colors">{stat.label}</p>
                   </Link>
                 ) : (
                   <>
                     <div className="font-display text-3xl sm:text-4xl text-terracotta">
-                      <CountUp target={stat.value} suffix={stat.suffix} />
+                      {stat.value !== null ? <CountUp target={stat.value} suffix={stat.suffix} /> : "—"}
                     </div>
                     <p className="text-xs text-stone mt-1 font-medium uppercase tracking-wider">{stat.label}</p>
                   </>
@@ -353,7 +369,13 @@ export default function HomePage() {
           <div ref={statesGridRef}>
             <Stagger key={showAllStates ? "all" : "initial"} className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {displayedStates.map((state) => (
-                <StateCard key={state.code} state={state} />
+                <StateCard
+                  key={state.code}
+                  state={{
+                    ...state,
+                    heritageCount: stateCountMap[state.name] ?? state.heritageCount,
+                  }}
+                />
               ))}
             </Stagger>
           </div>

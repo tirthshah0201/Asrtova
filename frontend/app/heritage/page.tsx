@@ -101,6 +101,12 @@ const categories = [
   { id: "tradition", label: "Traditions", icon: BookOpen },
 ];
 
+/* Human-readable label for a category id not in the curated list
+   (e.g. "natural_landmark" → "Natural Landmark"). */
+function prettifyCategory(id: string): string {
+  return id.replace(/[_-]+/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 /* ========================================
    Page Component
    ======================================== */
@@ -161,10 +167,25 @@ function HeritageContent() {
     );
   }, [displayHeritage]);
 
-  // Get unique categories from results
-  const activeCategories = useMemo(() => {
-    return categories.filter((cat) => groupedHeritage[cat.id]?.length > 0);
+  // Additional categories present in the data but not in the curated list
+  // (waterfall, lake, wildlife, …) — surfaced so no entry is ever hidden.
+  const extraCategories = useMemo(() => {
+    const known = new Set(categories.map((cat) => cat.id));
+    return Object.keys(groupedHeritage)
+      .filter((id) => !known.has(id))
+      .sort()
+      .map((id) => ({ id, label: prettifyCategory(id), icon: getCategoryIcon(id) }));
   }, [groupedHeritage]);
+
+  const categoryChips = useMemo(
+    () => [...categories, ...extraCategories],
+    [extraCategories]
+  );
+
+  // Get unique categories from results (curated + data-derived)
+  const activeCategories = useMemo(() => {
+    return categoryChips.filter((cat) => groupedHeritage[cat.id]?.length > 0);
+  }, [categoryChips, groupedHeritage]);
 
   const hasResults = displayHeritage.length > 0;
   const isSearching = searchQuery.trim().length > 0 || activeState !== null || activePeriod !== null || activeCategory !== null;
@@ -236,7 +257,7 @@ function HeritageContent() {
               >
                 All
               </button>
-              {categories.map((cat) => {
+              {categoryChips.map((cat) => {
                 const Icon = cat.icon;
                 const count = groupedHeritage[cat.id]?.length ?? 0;
                 return (

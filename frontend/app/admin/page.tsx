@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
-import { Container } from "@/components/ui/Container";
+import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { LoadingState } from "@/components/ui/LoadingState";
 import { FadeIn } from "@/components/motion/FadeIn";
@@ -126,12 +126,16 @@ type AdminTab = "overview" | "heritage" | "media" | "locations" | "sources" | "u
    Auth Gate
    ======================================== */
 
-function AdminLogin({ onAuth }: { onAuth: () => void }) {
+type AdminIdentity = { id: string; name: string; email: string; role: string };
+
+function AdminLogin({ onAuth, note }: {
+  onAuth: (admin: AdminIdentity) => void;
+  note?: string;
+}) {
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState("");
-  const { refresh } = useAuth();
 
   const handleLogin = async () => {
     if (!username.trim() || !password.trim()) return;
@@ -140,12 +144,11 @@ function AdminLogin({ onAuth }: { onAuth: () => void }) {
     try {
       const res = await api.requestWithHeaders<{
         success: boolean;
-        data?: { id: string; name: string; email: string; role: string };
+        data?: AdminIdentity;
         error?: { message: string };
       }>("/admin/auth/login", "POST", {}, { username: username.trim(), password });
       if (res.success && res.data) {
-        await refresh(); // Sync useAuth so Navbar shows logged-in state
-        onAuth();
+        onAuth(res.data);
       } else {
         setError(res.error?.message || "Invalid username or password.");
       }
@@ -157,17 +160,29 @@ function AdminLogin({ onAuth }: { onAuth: () => void }) {
   };
 
   return (
-    <div className="min-h-[60vh] flex items-center justify-center">
-      <Container size="narrow">
+    <main className="min-h-screen flex items-center justify-center px-4 py-12">
+      <div className="w-full max-w-md">
         <FadeIn>
-          <div className="text-center">
-            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-terracotta/10 mx-auto mb-5">
+          <div className="text-center mb-6">
+            <Link href="/" className="inline-flex items-center gap-1.5 text-xs text-muted hover:text-charcoal transition-colors mb-6">
+              <ChevronLeft className="h-3.5 w-3.5" /> Back to public site
+            </Link>
+            <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-charcoal mx-auto mb-5">
               <Shield className="h-7 w-7 text-terracotta" />
             </div>
+            <div className="text-[11px] font-medium uppercase tracking-[0.2em] text-muted mb-2">Astrova</div>
             <h1 className="font-display text-2xl sm:text-3xl text-charcoal mb-2">Admin Portal</h1>
-            <p className="text-muted mb-6">Sign in with your admin credentials to access the management dashboard.</p>
-            <div className="max-w-sm mx-auto">
-              <div className="relative mb-3">
+            <p className="text-muted">Sign in with your admin credentials to access the management dashboard.</p>
+          </div>
+
+          <div className="rounded-2xl border border-border bg-white p-6 shadow-sm">
+            {note && (
+              <div className="flex items-start gap-2 text-sm text-amber-700 mb-4 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2.5">
+                <AlertCircle className="h-4 w-4 shrink-0 mt-0.5" />
+                <span>{note}</span>
+              </div>
+            )}
+            <div className="relative mb-3">
                 <input
                   type="text"
                   value={username}
@@ -204,11 +219,10 @@ function AdminLogin({ onAuth }: { onAuth: () => void }) {
               >
                 {loading ? "Signing in..." : "Sign In"}
               </button>
-            </div>
           </div>
         </FadeIn>
-      </Container>
-    </div>
+      </div>
+    </main>
   );
 }
 
@@ -321,7 +335,6 @@ function HeritageTab({ showToast }: { showToast: (msg: string, type: "success" |
   const states = ["Gujarat", "Rajasthan", "Punjab", "Goa", "Tamil Nadu", "Maharashtra", "Madhya Pradesh", "Delhi", "Kerala", "Jammu & Kashmir", "Assam", "Odisha"];
 
   const fetchHeritage = useCallback(async () => {
-    setLoading(true);
     try {
       const params = new URLSearchParams();
       if (search) params.set("q", search);
@@ -335,6 +348,7 @@ function HeritageTab({ showToast }: { showToast: (msg: string, type: "success" |
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [search, categoryFilter, stateFilter]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchHeritage(); }, [fetchHeritage]);
 
   // Load dropdowns
@@ -575,7 +589,6 @@ function MediaTab({ showToast }: { showToast: (msg: string, type: "success" | "e
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchMedia = useCallback(async () => {
-    setLoading(true);
     try {
       const qs = typeFilter ? `?type=${typeFilter}` : "";
       const res = await api.requestWithHeaders<{ success: boolean; data: MediaItem[] }>(
@@ -585,6 +598,10 @@ function MediaTab({ showToast }: { showToast: (msg: string, type: "success" | "e
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [typeFilter]);
 
+  // Fetch-on-mount/filter-change pattern: the loading/data setState calls all
+  // happen after `await`, so renders stay async — this lint rule traces the
+  // callee regardless and would otherwise flag every admin list.
+  // eslint-disable-next-line react-hooks/set-state-in-effect
   useEffect(() => { fetchMedia(); }, [fetchMedia]);
 
   useEffect(() => {
@@ -645,7 +662,7 @@ function MediaTab({ showToast }: { showToast: (msg: string, type: "success" | "e
       formData.append("is_primary", String(form.is_primary));
       formData.append("display_order", "0");
 
-      const response = await fetch("/api/admin/media/upload", {
+      const response = await fetch("/api/proxy/admin/media/upload", {
         method: "POST",
         credentials: "include",
         body: formData,
@@ -729,10 +746,15 @@ function MediaTab({ showToast }: { showToast: (msg: string, type: "success" | "e
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const res = await api.requestWithHeaders<{ success: boolean }>(
-      `/admin/media/${deleteTarget.id}`, "DELETE", 
-    );
-    if (res.success) { showToast("Media deleted", "success"); setDeleteTarget(null); fetchMedia(); }
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean }>(
+        `/admin/media/${deleteTarget.id}`, "DELETE", 
+      );
+      if (res.success) { showToast("Media deleted", "success"); setDeleteTarget(null); fetchMedia(); }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Delete failed", "error");
+      setDeleteTarget(null);
+    }
   };
 
   const startEdit = (item: MediaItem) => {
@@ -965,7 +987,6 @@ function LocationsTab({ showToast }: { showToast: (msg: string, type: "success" 
   const [form, setForm] = useState({ name: "", type: "site", description: "", latitude: "", longitude: "", state: "", parent_id: "" });
 
   const fetchLocations = useCallback(async () => {
-    setLoading(true);
     try {
       const params = new URLSearchParams();
       if (search) params.set("q", search);
@@ -978,6 +999,7 @@ function LocationsTab({ showToast }: { showToast: (msg: string, type: "success" 
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [search, typeFilter]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch after await; see note above fetchMedia
   useEffect(() => { fetchLocations(); }, [fetchLocations]);
 
   const handleSave = async () => {
@@ -995,9 +1017,14 @@ function LocationsTab({ showToast }: { showToast: (msg: string, type: "success" 
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(`/admin/locations/${deleteTarget.id}`, "DELETE", );
-    if (res.success) { showToast("Location deleted", "success"); setDeleteTarget(null); fetchLocations(); }
-    else { showToast(res.error?.message || "Cannot delete — location is in use", "error"); }
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(`/admin/locations/${deleteTarget.id}`, "DELETE", );
+      if (res.success) { showToast("Location deleted", "success"); setDeleteTarget(null); fetchLocations(); }
+      else { showToast(res.error?.message || "Cannot delete — location is in use", "error"); setDeleteTarget(null); }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Delete failed", "error");
+      setDeleteTarget(null);
+    }
   };
 
   return (
@@ -1144,7 +1171,6 @@ function SourcesTab({ showToast }: { showToast: (msg: string, type: "success" | 
   const [form, setForm] = useState({ title: "", author: "", url: "", source_type: "OTHER", verification_status: "UNVERIFIED", publisher: "", publication_date: "", notes: "" });
 
   const fetchSources = useCallback(async () => {
-    setLoading(true);
     try {
       const qs = search ? `?q=${encodeURIComponent(search)}` : "";
       const res = await api.requestWithHeaders<{ success: boolean; data: SourceItem[] }>(`/admin/sources${qs}`, "GET", );
@@ -1152,6 +1178,7 @@ function SourcesTab({ showToast }: { showToast: (msg: string, type: "success" | 
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [search]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch after await; see note above fetchMedia
   useEffect(() => { fetchSources(); }, [fetchSources]);
 
   const handleSave = async () => {
@@ -1168,9 +1195,14 @@ function SourcesTab({ showToast }: { showToast: (msg: string, type: "success" | 
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(`/admin/sources/${deleteTarget.id}`, "DELETE", );
-    if (res.success) { showToast("Source deleted", "success"); setDeleteTarget(null); fetchSources(); }
-    else { showToast(res.error?.message || "Cannot delete — source is in use", "error"); }
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(`/admin/sources/${deleteTarget.id}`, "DELETE", );
+      if (res.success) { showToast("Source deleted", "success"); setDeleteTarget(null); fetchSources(); }
+      else { showToast(res.error?.message || "Cannot delete — source is in use", "error"); setDeleteTarget(null); }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Delete failed", "error");
+      setDeleteTarget(null);
+    }
   };
 
   return (
@@ -1305,7 +1337,6 @@ function UsersTab({ showToast }: { showToast: (msg: string, type: "success" | "e
   const [deleteTarget, setDeleteTarget] = useState<UserItem | null>(null);
 
   const fetchUsers = useCallback(async () => {
-    setLoading(true);
     try {
       const qs = search ? `?q=${encodeURIComponent(search)}` : "";
       const res = await api.requestWithHeaders<{ success: boolean; data: UserItem[] }>(`/admin/users${qs}`, "GET", );
@@ -1313,6 +1344,7 @@ function UsersTab({ showToast }: { showToast: (msg: string, type: "success" | "e
     } catch { /* ignore */ } finally { setLoading(false); }
   }, [search]);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch after await; see note above fetchMedia
   useEffect(() => { fetchUsers(); }, [fetchUsers]);
 
   const viewUser = async (user: UserItem) => {
@@ -1322,9 +1354,18 @@ function UsersTab({ showToast }: { showToast: (msg: string, type: "success" | "e
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(`/admin/users/${deleteTarget.id}`, "DELETE", );
-    if (res.success) { showToast("User deleted", "success"); setDeleteTarget(null); setSelectedUser(null); fetchUsers(); }
-    else { showToast(res.error?.message || "Failed", "error"); }
+    try {
+      // Backend requires an explicit identity-tied confirmation payload.
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(
+        `/admin/users/${deleteTarget.id}`, "DELETE", {},
+        { confirm: `DELETE:${deleteTarget.email}` }
+      );
+      if (res.success) { showToast("User deleted", "success"); setDeleteTarget(null); setSelectedUser(null); fetchUsers(); }
+      else { showToast(res.error?.message || "Failed", "error"); setDeleteTarget(null); }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Delete failed", "error");
+      setDeleteTarget(null);
+    }
   };
 
   return (
@@ -1421,19 +1462,159 @@ function UsersTab({ showToast }: { showToast: (msg: string, type: "success" | "e
 function CollectionsTab({ showToast }: { showToast: (msg: string, type: "success" | "error") => void }) {
   const [collections, setCollections] = useState<CollectionItem[]>([]);
   const [loading, setLoading] = useState(true);
+  const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<CollectionItem | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<CollectionItem | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({ name: "", slug: "", description: "", display_order: "0", is_active: true });
 
   const fetchCollections = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await api.requestWithHeaders<{ success: boolean; data: CollectionItem[] }>("/admin/collections", "GET", );
       if (res.success) setCollections(res.data || []);
     } catch { /* ignore */ } finally { setLoading(false); }
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch after await; see note above fetchMedia
   useEffect(() => { fetchCollections(); }, [fetchCollections]);
+
+  const slugify = (value: string) => value.toLowerCase().trim().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "");
+
+  const startCreate = () => {
+    setCreating(true);
+    setEditing(null);
+    setForm({ name: "", slug: "", description: "", display_order: "0", is_active: true });
+  };
+
+  const startEdit = (col: CollectionItem) => {
+    setEditing(col);
+    setCreating(false);
+    setForm({
+      name: col.name,
+      slug: col.slug,
+      description: col.description || "",
+      display_order: String(col.display_order ?? 0),
+      is_active: col.is_active,
+    });
+  };
+
+  const closeForm = () => { setCreating(false); setEditing(null); };
+
+  const handleSave = async () => {
+    const slug = form.slug.trim() || slugify(form.name);
+    if (!form.name.trim() || !slug) {
+      showToast("Name and slug are required", "error");
+      return;
+    }
+    setSaving(true);
+    try {
+      const payload = {
+        name: form.name.trim(),
+        slug,
+        description: form.description.trim(),
+        display_order: parseInt(form.display_order, 10) || 0,
+        is_active: form.is_active,
+      };
+      if (creating) {
+        const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(
+          "/admin/collections", "POST", {}, payload
+        );
+        if (res.success) { showToast("Collection created", "success"); closeForm(); fetchCollections(); }
+        else { showToast(res.error?.message || "Create failed", "error"); }
+      } else if (editing) {
+        const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(
+          `/admin/collections/${editing.id}`, "PUT", {}, payload
+        );
+        if (res.success) { showToast("Collection updated", "success"); closeForm(); fetchCollections(); }
+        else { showToast(res.error?.message || "Update failed", "error"); }
+      }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Request failed", "error");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async () => {
+    if (!deleteTarget) return;
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(
+        `/admin/collections/${deleteTarget.id}`, "DELETE", 
+      );
+      if (res.success) { showToast("Collection deleted", "success"); setDeleteTarget(null); fetchCollections(); }
+      else { showToast(res.error?.message || "Delete failed", "error"); setDeleteTarget(null); }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Delete failed", "error");
+      setDeleteTarget(null);
+    }
+  };
 
   return (
     <div>
+      {/* Toolbar */}
+      <div className="flex flex-wrap gap-3 mb-4">
+        <div className="flex-1 min-w-[200px] text-sm text-muted self-center">
+          {collections.length} collection{collections.length === 1 ? "" : "s"} on the platform
+        </div>
+        <button onClick={startCreate}
+          className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-terracotta text-white text-sm font-medium hover:bg-terracotta-dark">
+          <Plus className="h-4 w-4" /> Add Collection
+        </button>
+      </div>
+
+      {/* Create / Edit form */}
+      {(creating || editing) && (
+        <div className="mb-6 rounded-xl border border-terracotta/20 bg-card p-5">
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-display text-lg text-charcoal">{creating ? "Create Collection" : `Edit: ${editing?.name}`}</h3>
+            <button onClick={closeForm} className="text-muted hover:text-charcoal" aria-label="Close form"><X className="h-5 w-5" /></button>
+          </div>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1">Name *</label>
+              <input type="text" value={form.name}
+                onChange={(e) => {
+                  const name = e.target.value;
+                  setForm((f) => ({ ...f, name, slug: creating || f.slug === slugify(f.name) ? slugify(name) || f.slug : f.slug }));
+                }}
+                className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-terracotta" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1">Slug *</label>
+              <input type="text" value={form.slug} onChange={(e) => setForm({ ...form, slug: slugify(e.target.value) })}
+                placeholder="e.g. sacred-architecture"
+                className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm font-mono outline-none focus:border-terracotta" />
+            </div>
+            <div className="sm:col-span-2">
+              <label className="block text-xs font-medium text-muted mb-1">Description</label>
+              <textarea value={form.description} onChange={(e) => setForm({ ...form, description: e.target.value })} rows={2}
+                className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-terracotta resize-none" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1">Display order</label>
+              <input type="number" value={form.display_order} onChange={(e) => setForm({ ...form, display_order: e.target.value })}
+                className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-terracotta" />
+            </div>
+            <div>
+              <label className="block text-xs font-medium text-muted mb-1">Status</label>
+              <select value={form.is_active ? "active" : "inactive"}
+                onChange={(e) => setForm({ ...form, is_active: e.target.value === "active" })}
+                className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm outline-none focus:border-terracotta">
+                <option value="active">Active (visible)</option>
+                <option value="inactive">Inactive (hidden)</option>
+              </select>
+            </div>
+          </div>
+          <div className="flex gap-2 mt-4">
+            <button onClick={handleSave} disabled={saving}
+              className="inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-terracotta text-white text-sm font-medium hover:bg-terracotta-dark disabled:opacity-50">
+              <Save className="h-4 w-4" /> {saving ? "Saving..." : creating ? "Create" : "Save Changes"}
+            </button>
+            <button onClick={closeForm} className="px-4 py-2 rounded-lg border border-border text-sm text-muted hover:text-charcoal">Cancel</button>
+          </div>
+        </div>
+      )}
+
       {loading ? <LoadingState /> : collections.length === 0 ? (
         <div className="text-center py-12"><Layers className="h-10 w-10 text-muted mx-auto mb-3" /><p className="text-muted">No collections found.</p></div>
       ) : (
@@ -1453,14 +1634,33 @@ function CollectionsTab({ showToast }: { showToast: (msg: string, type: "success
                     <span className="text-xs text-muted">Order: {col.display_order}</span>
                   </div>
                 </div>
-                <a href={`/collections/${col.slug}`} target="_blank" rel="noopener noreferrer"
-                  className="shrink-0 ml-4 inline-flex items-center gap-1 text-xs text-terracotta hover:text-terracotta-dark">
-                  View <ExternalLink className="h-3 w-3" />
-                </a>
+                <div className="shrink-0 ml-4 flex items-center gap-2">
+                  <a href={`/collections/${col.slug}`} target="_blank" rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-terracotta hover:text-terracotta-dark">
+                    View <ExternalLink className="h-3 w-3" />
+                  </a>
+                  <button onClick={() => startEdit(col)} title="Edit collection"
+                    className="p-1.5 rounded text-muted hover:text-terracotta hover:bg-terracotta/5">
+                    <Edit3 className="h-3.5 w-3.5" />
+                  </button>
+                  <button onClick={() => setDeleteTarget(col)} title="Delete collection"
+                    className="p-1.5 rounded text-muted hover:text-red-600 hover:bg-red-50">
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               </div>
             </div>
           ))}
         </div>
+      )}
+
+      {deleteTarget && (
+        <ConfirmDialog
+          title="Delete Collection"
+          message={`Delete "${deleteTarget.name}"? Its ${deleteTarget.entity_count} curated items will be unlinked. This cannot be undone.`}
+          onConfirm={handleDelete}
+          onCancel={() => setDeleteTarget(null)}
+        />
       )}
     </div>
   );
@@ -1479,13 +1679,13 @@ function PeriodsTab({ showToast }: { showToast: (msg: string, type: "success" | 
   const [form, setForm] = useState({ name: "", start_year: "", end_year: "", description: "" });
 
   const fetchPeriods = useCallback(async () => {
-    setLoading(true);
     try {
       const res = await api.requestWithHeaders<{ success: boolean; data: PeriodItem[] }>("/admin/periods", "GET", );
       if (res.success) setPeriods(res.data || []);
     } catch { /* ignore */ } finally { setLoading(false); }
   }, []);
 
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch after await; see note above fetchMedia
   useEffect(() => { fetchPeriods(); }, [fetchPeriods]);
 
   const formatYear = (y: number | string) => {
@@ -1515,9 +1715,14 @@ function PeriodsTab({ showToast }: { showToast: (msg: string, type: "success" | 
 
   const handleDelete = async () => {
     if (!deleteTarget) return;
-    const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(`/admin/periods/${deleteTarget.id}`, "DELETE", );
-    if (res.success) { showToast("Period deleted", "success"); setDeleteTarget(null); fetchPeriods(); }
-    else { showToast(res.error?.message || "Cannot delete: period is in use", "error"); }
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message: string } }>(`/admin/periods/${deleteTarget.id}`, "DELETE", );
+      if (res.success) { showToast("Period deleted", "success"); setDeleteTarget(null); fetchPeriods(); }
+      else { showToast(res.error?.message || "Cannot delete: period is in use", "error"); setDeleteTarget(null); }
+    } catch (err) {
+      showToast(err instanceof Error ? err.message : "Delete failed", "error");
+      setDeleteTarget(null);
+    }
   };
 
   return (
@@ -1619,35 +1824,59 @@ export default function AdminPage() {
   const [authenticated, setAuthenticated] = useState(false);
   const [checking, setChecking] = useState(true);
   const [overview, setOverview] = useState<OverviewData | null>(null);
+  const [overviewError, setOverviewError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [activeTab, setActiveTab] = useState<AdminTab>("overview");
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [admin, setAdmin] = useState<AdminIdentity | null>(null);
+  const [sessionNote, setSessionNote] = useState<string | undefined>(undefined);
 
   const showToast = (message: string, type: "success" | "error") => setToast({ message, type });
+
+  const fetchOverview = useCallback(async () => {
+    setLoading(true);
+    setOverviewError(null);
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; data: OverviewData }>("/admin/overview", "GET", {});
+      if (res.success) setOverview(res.data);
+    } catch (err) {
+      const message = err instanceof Error ? err.message : "Failed to load dashboard data.";
+      setOverviewError(message);
+      // Session expired or revoked — return to the login screen with context.
+      if (/authentication|session|expired|revoked|invalid/i.test(message)) {
+        setAuthenticated(false);
+        setAdmin(null);
+        setSessionNote("Your admin session has ended. Please sign in again.");
+      }
+    } finally {
+      setLoading(false);
+    }
+  }, []);
 
   // Check existing session on mount
   useEffect(() => {
     api
-      .requestWithHeaders<{ success: boolean; data?: { id: string; role: string } }>("/admin/auth/me", "GET", {})
+      .requestWithHeaders<{ success: boolean; data?: AdminIdentity }>("/admin/auth/me", "GET", {})
       .then((res) => {
         if (res.success && res.data?.role === "admin") {
+          setAdmin(res.data);
           setAuthenticated(true);
           fetchOverview();
         }
       })
-      .catch(() => { /* not authenticated */ })
+      .catch((err: Error) => {
+        // 403 = signed in as a regular user — explain upfront instead of
+        // letting the admin login form fail confusingly after submit.
+        if (/admin access/i.test(err.message)) {
+          setSessionNote("You are signed in with a regular user account. Sign in with an administrator account to open the portal.");
+        }
+      })
       .finally(() => setChecking(false));
-  }, []);
+  }, [fetchOverview]);
 
-  const fetchOverview = useCallback(async () => {
-    setLoading(true);
-    try {
-      const res = await api.requestWithHeaders<{ success: boolean; data: OverviewData }>("/admin/overview", "GET", {});
-      if (res.success) setOverview(res.data);
-    } catch { /* ignore */ } finally { setLoading(false); }
-  }, []);
-
-  const handleAuth = () => {
+  const handleAuth = (identity: AdminIdentity) => {
+    setAdmin(identity);
+    setSessionNote(undefined);
     setAuthenticated(true);
     fetchOverview();
   };
@@ -1657,22 +1886,25 @@ export default function AdminPage() {
       await api.requestWithHeaders<{ success: boolean }>("/admin/auth/logout", "POST", {});
     } catch { /* ignore */ }
     setAuthenticated(false);
+    setAdmin(null);
     setOverview(null);
+    setOverviewError(null);
     setActiveTab("overview");
+    setSessionNote("You have been signed out.");
   };
 
   if (checking) {
     return (
-      <div className="min-h-[60vh] flex items-center justify-center">
+      <main className="min-h-screen flex items-center justify-center">
         <div className="flex items-center gap-3 text-muted">
           <div className="h-5 w-5 border-2 border-terracotta border-t-transparent rounded-full animate-spin" />
           <span className="text-sm">Checking session...</span>
         </div>
-      </div>
+      </main>
     );
   }
 
-  if (!authenticated) return <AdminLogin onAuth={handleAuth} />;
+  if (!authenticated) return <AdminLogin onAuth={handleAuth} note={sessionNote} />;
 
   const tabs: { key: AdminTab; label: string; icon: React.ElementType }[] = [
     { key: "overview", label: "Overview", icon: BarChart3 },
@@ -1685,59 +1917,176 @@ export default function AdminPage() {
     { key: "periods", label: "Periods", icon: Clock },
   ];
 
-  return (
-    <div className="py-6 sm:py-8">
-      <Container>
-        {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+  const activeTabMeta = tabs.find((t) => t.key === activeTab) ?? tabs[0];
 
-        {/* Header */}
-        <div className="flex items-start justify-between mb-6">
-          <div>
-            <div className="flex items-center gap-2 mb-1">
-              <Shield className="h-5 w-5 text-terracotta" />
-              <span className="text-sm font-medium text-terracotta">Admin Portal</span>
-            </div>
-            <h1 className="font-display text-2xl sm:text-3xl text-charcoal">Management Dashboard</h1>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={() => fetchOverview()} className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-border text-sm text-muted hover:text-charcoal transition-colors" title="Refresh">
-              <RefreshCw className="h-3.5 w-3.5" />
-            </button>
-            <button onClick={handleLogout} className="px-3 py-1.5 rounded-lg border border-border text-sm text-muted hover:text-red-600 hover:border-red-300 transition-colors">
-              Logout
-            </button>
+  return (
+    <div className="flex min-h-screen">
+      {/* Sidebar — dedicated admin chrome (lg+); public-site nav never appears here */}
+      <aside className="hidden lg:flex w-60 shrink-0 flex-col sticky top-0 h-screen bg-charcoal text-white">
+        <div className="flex items-center gap-2.5 px-5 h-16 border-b border-white/10">
+          <Shield className="h-5 w-5 text-terracotta shrink-0" />
+          <div className="min-w-0">
+            <div className="font-display text-base leading-tight">Astrova Admin</div>
+            <div className="text-[9px] uppercase tracking-[0.18em] text-white/40">Management Portal</div>
           </div>
         </div>
-
-        {/* Tabs */}
-        <div className="flex gap-1 mb-6 border-b border-border overflow-x-auto">
+        <nav className="flex-1 p-3 space-y-1 overflow-y-auto" aria-label="Admin sections">
           {tabs.map((tab) => {
             const Icon = tab.icon;
+            const isActive = activeTab === tab.key;
             return (
-              <button key={tab.key} onClick={() => setActiveTab(tab.key)}
-                className={`flex items-center gap-1.5 px-3 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
-                  activeTab === tab.key ? "border-terracotta text-terracotta" : "border-transparent text-muted hover:text-charcoal"
-                }`}>
-                <Icon className="h-4 w-4" /> {tab.label}
+              <button
+                key={tab.key}
+                onClick={() => setActiveTab(tab.key)}
+                aria-current={isActive ? "page" : undefined}
+                className={`w-full flex items-center gap-2.5 px-3 py-2.5 rounded-lg text-sm font-medium transition-colors ${
+                  isActive ? "bg-terracotta text-white shadow-sm" : "text-white/70 hover:text-white hover:bg-white/10"
+                }`}
+              >
+                <Icon className="h-4 w-4 shrink-0" /> {tab.label}
               </button>
             );
           })}
+        </nav>
+        <div className="p-3 border-t border-white/10">
+          <Link
+            href="/"
+            className="flex items-center gap-2 px-3 py-2 rounded-lg text-sm text-white/70 hover:text-white hover:bg-white/10 transition-colors"
+          >
+            <ExternalLink className="h-4 w-4" /> View public site
+          </Link>
         </div>
+      </aside>
 
-        {/* Tab Content */}
-        {loading && activeTab === "overview" ? <LoadingState /> : (
-          <>
-            {activeTab === "overview" && overview && <OverviewTab overview={overview} />}
-            {activeTab === "heritage" && <HeritageTab showToast={showToast} />}
-            {activeTab === "media" && <MediaTab showToast={showToast} />}
-            {activeTab === "locations" && <LocationsTab showToast={showToast} />}
-            {activeTab === "sources" && <SourcesTab showToast={showToast} />}
-            {activeTab === "users" && <UsersTab showToast={showToast} />}
-            {activeTab === "collections" && <CollectionsTab showToast={showToast} />}
-            {activeTab === "periods" && <PeriodsTab showToast={showToast} />}
-          </>
-        )}
-      </Container>
+      {/* Main column */}
+      <div className="flex-1 min-w-0 flex flex-col">
+        {/* Topbar */}
+        <header className="sticky top-0 z-30 h-16 shrink-0 flex items-center justify-between gap-3 border-b border-black/10 bg-[#f7f4ef]/95 backdrop-blur px-4 sm:px-6">
+          <div className="flex items-center gap-3 min-w-0">
+            <span className="lg:hidden flex items-center gap-2 font-display text-base text-charcoal">
+              <Shield className="h-5 w-5 text-terracotta" /> Astrova Admin
+            </span>
+            <h1 className="hidden lg:block font-display text-lg text-charcoal truncate">
+              {activeTabMeta.label}
+            </h1>
+          </div>
+          <div className="flex items-center gap-2">
+            {admin && (
+              <span
+                className="hidden sm:inline-flex items-center gap-1.5 rounded-full bg-white border border-border px-3 py-1.5 text-xs text-stone max-w-[240px]"
+                title={`Signed in as ${admin.name} (${admin.email})`}
+              >
+                <Shield className="h-3 w-3 text-terracotta shrink-0" />
+                <span className="truncate">{admin.email}</span>
+              </span>
+            )}
+            <button
+              onClick={() => fetchOverview()}
+              title="Refresh dashboard data"
+              aria-label="Refresh dashboard data"
+              className="p-2 rounded-lg border border-border bg-white text-muted hover:text-charcoal transition-colors"
+            >
+              <RefreshCw className={`h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
+            </button>
+            <button
+              onClick={handleLogout}
+              className="px-3 py-2 rounded-lg border border-border bg-white text-sm text-muted hover:text-red-600 hover:border-red-300 transition-colors"
+            >
+              Sign out
+            </button>
+          </div>
+        </header>
+
+        {/* Mobile section nav (<lg) — scrollable pills */}
+        <nav className="lg:hidden border-b border-black/10 bg-white/70 overflow-x-auto" aria-label="Admin sections">
+          <div className="flex gap-1.5 px-3 py-2 min-w-max">
+            {tabs.map((tab) => {
+              const Icon = tab.icon;
+              const isActive = activeTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveTab(tab.key)}
+                  aria-current={isActive ? "page" : undefined}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium whitespace-nowrap transition-colors ${
+                    isActive ? "bg-terracotta text-white" : "bg-parchment text-muted hover:text-charcoal"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5" /> {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </nav>
+
+        {/* Content */}
+        <main className="flex-1 px-4 sm:px-6 lg:px-8 py-6">
+          {toast && <Toast message={toast.message} type={toast.type} onClose={() => setToast(null)} />}
+
+          {activeTab === "overview" && overviewError && !loading && (
+            <div
+              role="alert"
+              className="mb-6 flex items-center justify-between gap-3 rounded-xl border border-red-200 bg-red-50 px-4 py-3"
+            >
+              <div className="flex items-center gap-2 text-sm text-red-700">
+                <AlertCircle className="h-4 w-4 shrink-0" />
+                <span>{overviewError}</span>
+              </div>
+              <button
+                onClick={() => fetchOverview()}
+                className="text-sm font-medium text-red-700 hover:text-red-900 underline shrink-0"
+              >
+                Retry
+              </button>
+            </div>
+          )}
+
+          {loading && activeTab === "overview" ? <LoadingState /> : (
+            <>
+              {activeTab === "overview" && overview && (
+                <div className="space-y-8">
+                  <div>
+                    <h2 className="font-display text-xl text-charcoal mb-1">Dashboard overview</h2>
+                    <p className="text-sm text-muted">Live counts from the Astrova database.</p>
+                  </div>
+
+                  <OverviewTab overview={overview} />
+
+                  <div>
+                    <h3 className="text-xs font-medium uppercase tracking-wider text-muted mb-3">Quick actions</h3>
+                    <div className="flex flex-wrap gap-2">
+                      {([
+                        { tab: "heritage" as AdminTab, label: "Manage heritage", icon: Landmark },
+                        { tab: "media" as AdminTab, label: "Upload media", icon: Image },
+                        { tab: "users" as AdminTab, label: "Review users", icon: Users },
+                        { tab: "collections" as AdminTab, label: "Curate collections", icon: Layers },
+                      ]).map((action) => {
+                        const Icon = action.icon;
+                        return (
+                          <button
+                            key={action.tab}
+                            onClick={() => setActiveTab(action.tab)}
+                            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border bg-white text-sm text-stone hover:border-terracotta/40 hover:text-terracotta transition-colors"
+                          >
+                            <Icon className="h-3.5 w-3.5" /> {action.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  </div>
+                </div>
+              )}
+              {activeTab === "heritage" && <HeritageTab showToast={showToast} />}
+              {activeTab === "media" && <MediaTab showToast={showToast} />}
+              {activeTab === "locations" && <LocationsTab showToast={showToast} />}
+              {activeTab === "sources" && <SourcesTab showToast={showToast} />}
+              {activeTab === "users" && <UsersTab showToast={showToast} />}
+              {activeTab === "collections" && <CollectionsTab showToast={showToast} />}
+              {activeTab === "periods" && <PeriodsTab showToast={showToast} />}
+            </>
+          )}
+        </main>
+      </div>
     </div>
   );
 }
