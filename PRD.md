@@ -23,6 +23,7 @@ India's vast cultural heritage is fragmented across static websites, unstructure
 2. User navigates to Explore → filters by state, category, or period
 3. User clicks heritage entity → views detail page with media, relationships, period
 4. User adds to favorites (requires account)
+5. User views live visitor conditions when the entity has verified coordinates
 
 ### Search
 1. User types in search bar → autocomplete suggestions appear
@@ -52,6 +53,16 @@ India's vast cultural heritage is fragmented across static websites, unstructure
 2. User filters by state or period → markers update
 3. User clicks marker → popup with heritage summary
 4. User navigates to heritage detail from popup
+
+### Heritage Visit Intelligence (Live Conditions + Visit Planning)
+1. User opens a heritage detail page (after Related Heritage section)
+2. Astrova resolves the existing location coordinates through the backend
+3. The backend fetches short-lived weather and air-quality data from Open-Meteo
+4. The page displays current conditions, air quality, a seven-day forecast, source attribution, and an Astrova-derived best-time window (future daylight hours only, labelled "Astrova recommendation")
+5. The Heritage Situation card always shows "Current status unavailable" unless a trusted live-status source exists — Astrova never fabricates open/closed/crowd states
+6. The Visit Cost Estimator returns min/typical/max INR from a documented model rate card, clearly labelled as estimates with no official fee claims
+7. Nearby Heritage is computed from Astrova's own coordinates; Nearby Places and Stay Nearby come from OpenStreetMap/Overpass (no ratings, prices or availability)
+8. Missing coordinates, provider failures, rate limits and unknown ids each surface a specific unavailable/error state while the heritage story and map experience remain available
 
 ### Authentication & Favorites
 1. User registers / logs in → JWT cookie set
@@ -128,10 +139,24 @@ India's vast cultural heritage is fragmented across static websites, unstructure
 - Admin-only aggregation endpoints
 - Privacy-conscious (no PII collection)
 
+### Heritage Visit Intelligence (implemented 2026-09-27)
+- **A. Live environment** — Open-Meteo forecast (temperature, apparent temperature, humidity, precipitation, rain probability, wind, cloud cover, UV, sunrise, sunset, weather code) + Open-Meteo air quality (US AQI with standard band labels, PM2.5, PM10, ozone, NO₂, CO, dust). Source, retrieved time, current indicator and unavailable states are always shown.
+- **B. Heritage situation** — states modelled as open / closed / temporarily_restricted / maintenance / information_unavailable; currently always `information_unavailable` ("Current status unavailable") because no trusted live-status source exists. Never fabricated.
+- **C. Best time to visit** — explainable score (0–90) over future daylight hours only, 48-hour horizon, labelled "Astrova recommendation" with reasons, confidence, and Today/Tomorrow day label.
+- **D. Visit cost estimator** — inputs: visitors (1–50), duration (1–24 h), transport, food, accommodation, guide, parking, misc. Outputs: min/typical/max INR + category breakdown, every line carries `provenance: astrova_model`, `officialFee` is always null with explicit notes.
+- **E. Nearby heritage** — haversine over Astrova's own `locations` coordinates, top 8, with category and link.
+- **F. Nearby places** — OpenStreetMap/Overpass within 3 km: culture, attractions, food, parks, parking, transport; named records only; no ratings/prices/availability.
+- **G. Stay nearby** — same OSM source; name, kind, distance, website/phone/stars only when present in the source.
+- **H. Trusted heritage data** — existing `sources` table (source_type, verification_status VERIFIED/REVIEWED, publisher, url) + `heritage_entities.source_id` provenance shown in Sources & References; migration 030 registers Indian Culture Portal, Incredible India, UNESCO ICH and National Archives. Automated external ingestion with duplicate/conflict review is PLANNED, not implemented.
+- Endpoints: `GET /api/heritage/:id/visitor-intelligence`, `GET /api/heritage/:id/nearby`, `GET /api/heritage/:id/visit-cost` (API key + per-IP rate limits 30/20/60 per 10 min).
+
 ## Technical Architecture
 
 ```
 Browser → Next.js Frontend (:3000) → API Proxy → Express Backend (:3001) → Neon PostgreSQL
+                                                              ↓
+                                     Open-Meteo (forecast + air quality)
+                                     OpenStreetMap / Overpass (nearby places)
 ```
 
 ### Frontend
@@ -150,7 +175,7 @@ Browser → Next.js Frontend (:3000) → API Proxy → Express Backend (:3001) �
 
 ### Database
 - Neon PostgreSQL
-- 27 sequential migrations
+- 30 migrations (all applied — includes 030_p1_authoritative_sources, previously blocked by invalid `\'` escapes, fixed 2026-09-27)
 - 15 tables: heritage_entities, media, relationships, historical_periods, locations, sources, chatbot_knowledge, supported_states, collections, collection_items, analytics_events, users, user_favorites, conversations, conversation_messages
 
 ## Security Requirements
@@ -172,7 +197,14 @@ Browser → Next.js Frontend (:3000) → API Proxy → Express Backend (:3001) �
 - No CI/CD pipeline
 - No password reset or email verification
 - No refresh tokens (JWT is stateless)
-- Browser verification unavailable in current environment
+- Live visitor intelligence depends on valid Astrova coordinates and external Open-Meteo availability
+- Visitor recommendations are Astrova-derived and are not official heritage authority guidance
+- Heritage situation (open/closed/status) stays "Current status unavailable" until a trusted live-status source is integrated
+- Visit cost figures are model estimates from Astrova's documented rate card — no verified official entry fees are stored
+- Nearby heritage distances are location-level (sites sharing one mapped location show "same mapped location")
+- Nearby places/stays depend on OpenStreetMap coverage and Overpass availability (6-hour server cache, 15 s timeout, fallback mirror)
+- Hotel room prices, live availability and ratings are intentionally not shown (open data not sufficiently reliable)
+- Admin full login flow not re-verified in 2026-09-27 regression (no credentials available); auth boundary (401/403) verified
 
 ## Future Roadmap
 
@@ -186,6 +218,10 @@ Browser → Next.js Frontend (:3000) → API Proxy → Express Backend (:3001) �
 - Heritage contribution system
 - Offline/PWA support
 - Additional Indian states and languages
+- Trusted live-status ingestion pipeline for heritage situation (Wikidata/Inheritage → normalize → duplicate/conflict detection → review → Astrova data)
+- Verified official fee sources for the cost estimator (ASI / state tourism), kept behind provenance review
+- Richer hotel intelligence in a later phase (beyond OSM name/location/metadata)
+- Distributed/shared cache for provider responses
 
 ---
 
@@ -582,7 +618,7 @@ NO PUSH PERFORMED — documentation only
 
 | Category | Status |
 |----------|--------|
-| Heritage Discovery | ✅ Complete (74 entities) |
+| Heritage Discovery | ✅ Complete (96 entities after migration 030) |
 | Interactive Map | ✅ Complete (54 markers) |
 | Search | ✅ Complete |
 | Timeline | ✅ Complete (9 periods) |
@@ -591,6 +627,9 @@ NO PUSH PERFORMED — documentation only
 | Favorites | ✅ Complete (per-user isolated) |
 | Admin Portal | ✅ Complete (8 tabs, full CRUD) |
 | Admin Media Upload | ✅ Complete (Image + Video) |
+| Heritage Visit Intelligence (Features A–G) | ✅ IMPLEMENTED (2026-09-27, verified end-to-end) |
+| Heritage Situation (live status) | ⏸ Honest unavailable state — trusted source integration PLANNED |
+| Trusted external ingestion pipeline (Feature H) | 🟡 PARTIAL — provenance via `sources` + verification_status implemented; automated Wikidata/Inheritage ingestion PLANNED |
 | About | ✅ Complete |
 | AI Chatbot | ⏸ Under Construction |
 | Documentation | ✅ Complete |
@@ -600,3 +639,37 @@ NO PUSH PERFORMED — documentation only
 - Latest commit: `ced4709`
 - Remote: https://github.com/tirthshah0201/Dharohar-AI.git
 - Status: Pushed and synchronized
+
+---
+
+## Heritage Visit Intelligence Module (2026-09-27)
+
+### Status: IMPLEMENTED (Features A–G verified end-to-end); Feature H PARTIAL; live heritage status PLANNED
+
+### What was verified before implementation (connectivity audit)
+- Database: 34/34 live query checks (schema, FKs, indexes, row counts, coordinate coverage)
+- Backend → DB: 19 core endpoints 200 with API-key boundary (401 without key)
+- Proxy: path rewrite, server-side `X-API-Key`, Authorization/Cookie/Set-Cookie forwarding, status propagation — all 200
+- Auth → favorites: register/login/me/favorites/logout through proxy (API + browser UI)
+- External: Open-Meteo forecast 200, Open-Meteo air quality 200, Nominatim 200, OSM tiles render
+
+### Connectivity defects found and fixed
+1. **Migration 030 never applied** — invalid `\'` escapes caused `syntax error at or near "s"`. Fixed to standard `''` quotes (+ one mojibake token), applied via project runner. Sources 18→22, heritage 74→96, migrations now 30/30.
+2. **Null Island bug** — `isValidCoordinate(null)` evaluated `Number(null)=0`, serving weather for (0,0) on 32/96 entities without coordinates while claiming `available`. Fixed with explicit null/empty/range/(0,0) validation; now returns `location_unavailable`.
+3. **Best-time picked midnight** — hourly `is_day` was never mapped from the provider payload, the UTC offset sign was inverted, and past hours were eligible. Fixed: daylight+future filter (48 h horizon), correct offset math, Today/Tomorrow label, score out of 90.
+4. **AQI band mislabel** — >100 showed "Unhealthy"; now standard US AQI bands incl. "Unhealthy for Sensitive Groups".
+5. **Overpass timeout** — 8 s too short (observed 10 s); raised to 15 s with a fallback mirror; results cached 6 h.
+6. **`next build` failed on `/explore`** — `useSearchParams()` without Suspense (pre-existing). Fixed; production build now passes 13/13 pages.
+7. Cosmetic: µg/m³ units, duplicated section comment, provider-failure vs missing-coordinates message split.
+
+### Verification results (2026-09-27)
+- Unit tests: 7/7 (recommendation) + 16/16 (cost/nearby/Overpass) — PASS
+- DB audit 34/34, migrations 30/30 — PASS
+- Typecheck backend + frontend, backend build, frontend production build — PASS
+- E2E browser: conditions/AQI/best-time/7-day/situation/cost/nearby on amber-fort — PASS
+- Failure states: missing coordinates, provider failure, backend down, rate limit 429, unknown id 404, junk params clamped, no-key 401 — PASS
+- Responsive: no horizontal overflow at 1440/1280/1024/900/768/740/720/430/390/360 — PASS
+- Regression: home, explore (search+map), heritage dir, heritage detail, timeline, collections, collection detail, auth, favorites, admin (login screen), media, about, AI placeholder — PASS
+
+### Git
+- No commit, no push performed (working tree only), per instruction

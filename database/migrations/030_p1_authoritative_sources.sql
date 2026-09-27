@@ -80,7 +80,7 @@ ON CONFLICT DO NOTHING;
 -- Ramlila (North India, 2008)
 INSERT INTO heritage_entities (name, category, description, source_id, location_id, period_id) VALUES
   ('Ramlila', 'festival',
-   'Traditional performance of the Ramayana epic. A dramatic re-enactment of Lord Rama\'s life story performed across North India, especially during Dussehra. Combines theatre, music, narration, and devotional practice. Inscribed on UNESCO ICH list in 2008.',
+   'Traditional performance of the Ramayana epic. A dramatic re-enactment of Lord Rama''s life story performed across North India, especially during Dussehra. Combines theatre, music, narration, and devotional practice. Inscribed on UNESCO ICH list in 2008.',
    (SELECT id FROM sources WHERE title = 'UNESCO Intangible Cultural Heritage' LIMIT 1),
    NULL, NULL)
 ON CONFLICT DO NOTHING;
@@ -96,7 +96,7 @@ ON CONFLICT DO NOTHING;
 -- Kalbelia Folk Songs and Dances (Rajasthan, 2010)
 INSERT INTO heritage_entities (name, category, description, source_id, location_id, period_id) VALUES
   ('Kalbelia', 'tradition',
-   'Traditional folk songs and dances of the Kalbelia community of Rajasthan. The Kalbelia were historically snake charmers whose舞蹈 mimics serpent movements. Performed to the accompaniment of the been (pungi) instrument and dholak drum. Inscribed on UNESCO ICH list in 2010.',
+   'Traditional folk songs and dances of the Kalbelia community of Rajasthan. The Kalbelia were historically snake charmers whose dance mimics serpent movements. Performed to the accompaniment of the been (pungi) instrument and dholak drum. Inscribed on UNESCO ICH list in 2010.',
    (SELECT id FROM sources WHERE title = 'UNESCO Intangible Cultural Heritage' LIMIT 1),
    NULL, NULL)
 ON CONFLICT DO NOTHING;
@@ -160,7 +160,7 @@ ON CONFLICT DO NOTHING;
 -- Durga Puja (Kolkata, 2021)
 INSERT INTO heritage_entities (name, category, description, source_id, location_id, period_id) VALUES
   ('Durga Puja', 'festival',
-   'Annual festival celebrating Goddess Durga\'s victory over the buffalo demon Mahishasur. Kolkata\'s celebration is a massive cultural event featuring elaborate pandals (temporary structures), idol craftsmanship, music, dance, and community gatherings. Inscribed on UNESCO ICH list in 2021.',
+   'Annual festival celebrating Goddess Durga''s victory over the buffalo demon Mahishasur. Kolkata''s celebration is a massive cultural event featuring elaborate pandals (temporary structures), idol craftsmanship, music, dance, and community gatherings. Inscribed on UNESCO ICH list in 2021.',
    (SELECT id FROM sources WHERE title = 'UNESCO Intangible Cultural Heritage' LIMIT 1),
    NULL, NULL)
 ON CONFLICT DO NOTHING;
@@ -183,7 +183,7 @@ ON CONFLICT DO NOTHING;
 -- Dwarkadhish Temple (Gujarat) — from Incredible India
 INSERT INTO heritage_entities (name, category, description, source_id, location_id, period_id) VALUES
   ('Dwarkadhish Temple', 'monument',
-   'Ancient Hindu temple dedicated to Lord Krishna in Dwarka, Gujarat. Believed to have been built over 2,500 years ago by Lord Krishna\'s grandson Vajranabh. One of the Char Dham pilgrimage sites. The temple stands at the confluence of the Gomti River and the Arabian Sea.',
+   'Ancient Hindu temple dedicated to Lord Krishna in Dwarka, Gujarat. Believed to have been built over 2,500 years ago by Lord Krishna''s grandson Vajranabh. One of the Char Dham pilgrimage sites. The temple stands at the confluence of the Gomti River and the Arabian Sea.',
    (SELECT id FROM sources WHERE title = 'Incredible India' LIMIT 1),
    NULL, NULL)
 ON CONFLICT DO NOTHING;
@@ -207,7 +207,7 @@ ON CONFLICT DO NOTHING;
 -- Kamakhya Temple (Assam) — from Incredible India
 INSERT INTO heritage_entities (name, category, description, source_id, location_id, period_id) VALUES
   ('Kamakhya Temple', 'monument',
-   'Ancient Hindu temple atop Nilachal Hill in Guwahati, Assam. Dedicated to Goddess Kamakhya, an incarnation of Sati. One of the oldest of the 51 Shakti Pithas. The temple\'s beehive-shaped sanctum is a unique architectural feature. Hosts the annual Ambubachi Mela.',
+   'Ancient Hindu temple atop Nilachal Hill in Guwahati, Assam. Dedicated to Goddess Kamakhya, an incarnation of Sati. One of the oldest of the 51 Shakti Pithas. The temple''s beehive-shaped sanctum is a unique architectural feature. Hosts the annual Ambubachi Mela.',
    (SELECT id FROM sources WHERE title = 'Incredible India' LIMIT 1),
    NULL, NULL)
 ON CONFLICT DO NOTHING;

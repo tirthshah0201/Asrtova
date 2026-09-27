@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { Suspense, useState, useCallback, useMemo, useEffect } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -409,5 +409,14 @@ function ExploreContent() {
 }
 
 export default function ExplorePage() {
-  return <ExploreContent />;
+  // useSearchParams() requires a Suspense boundary for static generation.
+  return (
+    <Suspense
+      fallback={
+        <div className="min-h-[60vh] animate-pulse rounded-2xl bg-cream/40 m-6" aria-label="Loading explore" />
+      }
+    >
+      <ExploreContent />
+    </Suspense>
+  );
 }

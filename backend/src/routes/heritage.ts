@@ -12,6 +12,14 @@ import {
   VALID_HERITAGE_CATEGORIES,
 } from "../utils/validation";
 import { isValidSlug, isUUID } from "../utils/slug";
+import { getVisitorIntelligence } from "../services/visitorIntelligence";
+import {
+  visitorIntelligenceRateLimit,
+  nearbyRateLimit,
+  visitCostRateLimit,
+} from "../middleware/rateLimit";
+import { getNearbyForEntity, isValidEntityId } from "../services/nearby";
+import { estimateVisitCost, normalizeCostInput } from "../services/visitCostEstimator";
 
 const router = Router();
 
@@ -213,6 +221,141 @@ router.get("/state-counts", requireDevelopmentApiKey, async (_req, res) => {
     });
   }
 });
+
+/**
+ * GET /api/heritage/:id/visitor-intelligence
+ *
+ * Returns short-lived, source-attributed weather and air-quality data for a
+ * heritage entity with valid coordinates. External failures are isolated from
+ * the heritage detail endpoint and may return stale cached provider data.
+ */
+router.get(
+  "/:id/visitor-intelligence",
+  requireDevelopmentApiKey,
+  visitorIntelligenceRateLimit,
+  async (req, res) => {
+    if (!requireDatabase(res)) return;
+    try {
+      const identifier = String(req.params.id);
+      const data = await getVisitorIntelligence(identifier);
+      if (!data) {
+        res.status(404).json({
+          success: false,
+          error: {
+            code: "HERITAGE_NOT_FOUND",
+            message: "Heritage entity not found.",
+          },
+        });
+        return;
+      }
+      res.json({ success: true, data });
+    } catch (err) {
+      console.error("[Visitor Intelligence] Error:", (err as Error).message);
+      res.status(502).json({
+        success: false,
+        error: {
+          code: "VISITOR_INTELLIGENCE_UNAVAILABLE",
+          message: "Live visitor conditions are temporarily unavailable.",
+        },
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/heritage/:id/nearby
+ *
+ * Nearby heritage (Astrova's own coordinates) plus nearby places and stays
+ * from OpenStreetMap. Provider failures degrade to an explicit unavailable
+ * state while Astrova's own nearby heritage stays available.
+ */
+router.get(
+  "/:id/nearby",
+  requireDevelopmentApiKey,
+  nearbyRateLimit,
+  async (req, res) => {
+    if (!requireDatabase(res)) return;
+    try {
+      const identifier = String(req.params.id);
+      const result = await getNearbyForEntity(identifier);
+      if (!result.found) {
+        res.status(404).json({
+          success: false,
+          error: { code: "HERITAGE_NOT_FOUND", message: "Heritage entity not found." },
+        });
+        return;
+      }
+      res.json({
+        success: true,
+        data: {
+          entity: result.entity,
+          availability: result.availability,
+          nearby: result.data,
+        },
+      });
+    } catch (err) {
+      console.error("[Nearby] Error:", (err as Error).message);
+      res.status(502).json({
+        success: false,
+        error: {
+          code: "NEARBY_UNAVAILABLE",
+          message: "Nearby information is temporarily unavailable.",
+        },
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/heritage/:id/visit-cost
+ *
+ * Transparent, model-based visit cost estimate. Never claims official fees.
+ * Query params: visitors, durationHours, transport, food, stay, guide, parking, misc.
+ */
+router.get(
+  "/:id/visit-cost",
+  requireDevelopmentApiKey,
+  visitCostRateLimit,
+  async (req, res) => {
+    if (!requireDatabase(res)) return;
+    try {
+      const identifier = String(req.params.id);
+      if (!isValidEntityId(identifier)) {
+        res.status(404).json({
+          success: false,
+          error: { code: "HERITAGE_NOT_FOUND", message: "Heritage entity not found." },
+        });
+        return;
+      }
+      const lookup = isValidSlug(identifier) && !isUUID(identifier) ? "slug" : "id";
+      const { rows } = await query<{ id: string }>(
+        `SELECT id FROM heritage_entities WHERE ${lookup} = $1`,
+        [identifier]
+      );
+      if (rows.length === 0) {
+        res.status(404).json({
+          success: false,
+          error: { code: "HERITAGE_NOT_FOUND", message: "Heritage entity not found." },
+        });
+        return;
+      }
+      const estimate = estimateVisitCost(normalizeCostInput(req.query as Record<string, unknown>));
+      res.json({
+        success: true,
+        data: { heritageId: rows[0].id, estimate },
+      });
+    } catch (err) {
+      console.error("[Visit Cost] Error:", (err as Error).message);
+      res.status(500).json({
+        success: false,
+        error: {
+          code: "VISIT_COST_UNAVAILABLE",
+          message: "Cost estimation is temporarily unavailable.",
+        },
+      });
+    }
+  }
+);
 
 /**
  * GET /api/heritage/:id

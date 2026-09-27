@@ -146,3 +146,36 @@ export const favoritesRateLimit = rateLimit({
   },
   message: "Too many requests. Please slow down.",
 });
+
+/** Visitor intelligence: 30 requests per 10 minutes per IP */
+export const visitorIntelligenceRateLimit = rateLimit({
+  maxRequests: 30,
+  windowMs: 10 * 60 * 1000,
+  keyFn: (req) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    return `visitor-intelligence:${ip}`;
+  },
+  message: "Too many live visitor condition requests. Please try again later.",
+});
+
+/** Nearby places (proxies Overpass): 20 requests per 10 minutes per IP */
+export const nearbyRateLimit = rateLimit({
+  maxRequests: 20,
+  windowMs: 10 * 60 * 1000,
+  keyFn: (req) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    return `nearby:${ip}`;
+  },
+  message: "Too many nearby-place requests. Please try again later.",
+});
+
+/** Visit cost estimator (local calculation): 60 requests per 10 minutes per IP */
+export const visitCostRateLimit = rateLimit({
+  maxRequests: 60,
+  windowMs: 10 * 60 * 1000,
+  keyFn: (req) => {
+    const ip = req.ip || req.socket.remoteAddress || "unknown";
+    return `visit-cost:${ip}`;
+  },
+  message: "Too many cost-estimator requests. Please try again later.",
+});

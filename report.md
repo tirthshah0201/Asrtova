@@ -173,6 +173,67 @@ Full audit performed (87 evidence-backed checks: 55 API/security/isolation, 20 D
 
 ---
 
+## Live Visitor Intelligence (2026-09-10)
+
+Implemented a source-attributed visitor-information section on heritage detail pages. The new path is `heritage detail -> Next.js proxy -> Express visitor intelligence service -> Open-Meteo`, using existing `locations.latitude` and `locations.longitude` values. No database migration or API key was added.
+
+Implemented:
+
+- Open-Meteo current, hourly, daily weather, UV, precipitation, wind, humidity, sunrise, and sunset normalization
+- Open-Meteo current air quality normalization where provider fields are available
+- Ten-minute in-memory cache with stale-response signaling and a 200-entry bound
+- Five-second provider timeout, partial weather/air-quality failure isolation, and route-specific rate limiting
+- Astrova-derived best-time recommendation based on temperature, rain probability, UV, wind, and daylight
+- Responsive loading, unavailable-coordinate, error/retry, stale, attribution, and seven-day forecast UI
+- `docs/LIVE-VISITOR-INTELLIGENCE.md` and `backend/tests/test-visitor-intelligence.js`
+
+Not implemented or not claimed:
+
+- Opening or closing status, opening hours, conservation condition, structural monitoring, RAG, AI prediction, or official best-time guidance
+- Wikidata enrichment
+- Distributed cache or persistent external-data table
+- Live database-wide entity coverage counts or browser viewport verification in this session
+
+Validation: root `npm run typecheck` passed for frontend and backend. Build and live endpoint/entity-matrix verification remain release checks when the configured database, backend, frontend, and external network are available.
+
+---
+
+## Heritage Visit Intelligence — Full Module (2026-09-27)
+
+Expanded the visitor-information section into the full Heritage Visit Intelligence module (Features A–G) after a complete connectivity audit. The 2026-09-10 section above remains historically accurate for its session; this section supersedes its open release checks (browser verification, entity matrix and builds are now performed and passing).
+
+### Connectivity audit findings fixed before building
+
+1. Migration `030_p1_authoritative_sources.sql` had never been applied — invalid `\'` escapes caused `syntax error at or near "s"`. Fixed to standard SQL `''` quotes (plus one mojibake token) and applied: sources 18 → 22, heritage 74 → 96, migrations 30/30.
+2. Null Island bug — `isValidCoordinate(null)` returned true (`Number(null) === 0`), so 32/96 entities without coordinates received weather for (0,0) labelled `available`. Now `location_unavailable`.
+3. Best-time recommendation returned midnight windows — provider `is_day` was requested but never mapped into hourly rows, the UTC-offset sign was inverted, and past hours were eligible. Fixed with daylight+future filtering (48 h), corrected offset math and a Today/Tomorrow label.
+4. AQI category used non-standard bands; now standard US AQI labels.
+5. Overpass 8 s timeout too short (10 s observed); raised to 15 s with fallback mirror and a 6 h cache.
+6. Pre-existing `next build` failure on `/explore` (`useSearchParams` without Suspense) fixed; production build passes 13/13 pages.
+
+### Implemented on top of the audit
+
+- **Feature A (live environment)** — Open-Meteo weather + air quality with source, retrieved time, current indicator, sunrise/sunset, cloud cover, rain chance and unavailable states.
+- **Feature B (heritage situation)** — structured states with an honest `Current status unavailable` default; never fabricated.
+- **Feature C (best time)** — explainable 0–90 score, future daylight hours only, `Astrova recommendation` label.
+- **Feature D (cost estimator)** — documented model rate card, min/typical/max INR, category breakdown, per-line `astrova_model` provenance, `officialFee: null`, input clamping.
+- **Feature E (nearby heritage)** — haversine over Astrova's own coordinates, top 8.
+- **Feature F/G (nearby places + stays)** — OpenStreetMap/Overpass within 3 km, named records only, website/phone/stars only when present; no ratings/prices/availability.
+- **Feature H (trusted data)** — existing `sources` provenance + verification status surfaced; migration 030 added four authoritative sources; automated external ingestion pipeline remains PLANNED.
+- New endpoints `GET /api/heritage/:id/nearby` and `GET /api/heritage/:id/visit-cost` with API-key protection and per-IP rate limits (30/20/60 per 10 min).
+
+### Verification (all executed 2026-09-27)
+
+- DB audit 34/34; migrations 30/30; unit tests 7/7 + 16/16; typecheck backend + frontend; backend build; frontend production build 13/13 pages — PASS
+- E2E browser on amber-fort (conditions, AQI, best time, forecast, situation, cost, nearby) and adalaj-stepwell (no-coordinates states) — PASS
+- Failure states: backend down, rate-limit 429 with UI retry, provider-failure message split, 404 unknown ids, junk-parameter clamping, 401 without key — PASS
+- Responsive: no horizontal overflow at 1440/1280/1024/900/768/740/720/430/390/360 — PASS
+- Regression: homepage, explore (search + map), heritage directory, heritage detail, timeline, collections, collection detail, auth, favorites, admin login screen, media gallery, about, AI placeholder (still Under Construction) — PASS
+- Security: API key server-side only, parameterized SQL, rate limits, sanitized errors (no stack traces), no client exposure of credentials — verified
+- Test artifacts cleaned up (audit account and its favorite removed; temp files deleted)
+
+Git: no commit and no push were performed; changes remain in the working tree.
+
 ## GitHub Status
 
 Current checkpoint: `ced4709` (main)

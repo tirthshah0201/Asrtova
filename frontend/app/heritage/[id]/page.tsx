@@ -30,6 +30,7 @@ import { FavoriteButton } from "@/components/ui/FavoriteButton";
 import { useFavorites } from "@/hooks/useFavorites";
 import { useAuth } from "@/hooks/useAuth";
 import { getCategoryIcon, getCategoryColor } from "@/constants/categories";
+import { LiveVisitorIntelligence } from "@/components/heritage/LiveVisitorIntelligence";
 
 /* ========================================
    Types
@@ -116,7 +117,7 @@ export default function HeritageDetailPage({
   const { favorites, isFavorited, toggleFavorite, loaded: favLoaded } = useFavorites(!!user, false);
 
   const { data: heritage, loading, error, refetch } = useApi<HeritageEntity>(`/heritage/${id}`);
-  const { data: location } = useApi<Location>(
+  const { data: location, loading: locationLoading } = useApi<Location>(
     heritage?.location_id ? `/locations/${heritage.location_id}` : "",
     { immediate: !!heritage?.location_id }
   );
@@ -602,6 +603,21 @@ export default function HeritageDetailPage({
                   })()}
                 </div>
               </div>
+            )}
+
+            {/* Visitor Intelligence — Live conditions, situation, best time,
+                cost estimator, nearby heritage/places/stays */}
+            {!locationLoading && heritage && (
+              <LiveVisitorIntelligence
+                heritageId={heritage.id}
+                hasCoordinates={Boolean(
+                  location &&
+                    location.latitude != null &&
+                    location.longitude != null &&
+                    Number.isFinite(Number(location.latitude)) &&
+                    Number.isFinite(Number(location.longitude))
+                )}
+              />
             )}
 
             {/* Ask Astrova — Under Construction */}
