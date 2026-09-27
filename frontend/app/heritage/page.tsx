@@ -226,6 +226,7 @@ function HeritageContent() {
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted" />
               <input
                 type="text"
+                aria-label="Search heritage"
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 onKeyDown={(e) => {
@@ -395,6 +396,7 @@ function HeritageContent() {
               <div className="flex items-center gap-2">
                 <span className="text-xs text-muted">Sort:</span>
                 <select
+                  aria-label="Sort heritage results"
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
                   className="text-xs border border-border rounded-md px-2 py-1 bg-white text-charcoal outline-none focus:border-terracotta"
@@ -448,8 +450,13 @@ function HeritageContent() {
                               }}
                               className="rounded-xl border border-border bg-card overflow-hidden group"
                             >
-                              {/* Image header */}
-                              <Link href={`/heritage/${item.slug || item.id}`} className="block cursor-pointer">
+                              {/* Image header — aria-label names the link even
+                                  when the card has no image (icon fallback) */}
+                              <Link
+                                href={`/heritage/${item.slug || item.id}`}
+                                className="block cursor-pointer"
+                                aria-label={item.name}
+                              >
                                 <div className="relative h-24 overflow-hidden">
                                   {heritageImage ? (
                                     <img
@@ -530,8 +537,13 @@ function HeritageContent() {
                         }}
                         className="rounded-xl border border-border bg-card overflow-hidden group"
                       >
-                        {/* Image header */}
-                        <Link href={`/heritage/${item.slug || item.id}`} className="block cursor-pointer">
+                        {/* Image header — aria-label names the link even when
+                            the card has no image (icon fallback) */}
+                        <Link
+                          href={`/heritage/${item.slug || item.id}`}
+                          className="block cursor-pointer"
+                          aria-label={item.name}
+                        >
                           <div className="relative h-24 overflow-hidden">
                             {heritageImage ? (
                               <img

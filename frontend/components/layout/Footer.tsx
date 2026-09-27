@@ -35,9 +35,11 @@ function Footer() {
 
           {/* Explore */}
           <div>
-            <h4 className="text-xs font-semibold text-white/70 mb-3 uppercase tracking-wider">
+            {/* h2 (not h4): footer is a top-level landmark, so its column
+                headings must not skip levels after the page's last h2 */}
+            <h2 className="text-xs font-semibold text-white/70 mb-3 uppercase tracking-wider">
               Explore
-            </h4>
+            </h2>
             <ul className="space-y-2">
               {footerLinks.explore.map((link) => (
                 <li key={link.label}>
@@ -54,9 +56,9 @@ function Footer() {
 
           {/* States */}
           <div>
-            <h4 className="text-xs font-semibold text-white/70 mb-3 uppercase tracking-wider">
+            <h2 className="text-xs font-semibold text-white/70 mb-3 uppercase tracking-wider">
               States
-            </h4>
+            </h2>
             <ul className="space-y-2">
               {INDIAN_STATES.map((state) => (
                 <li key={state.code}>

@@ -629,7 +629,7 @@ NO PUSH PERFORMED — documentation only
 | Admin Media Upload | ✅ Complete (Image + Video, proxy upload + uploads passthrough) |
 | Heritage Visit Intelligence (Features A–G) | ✅ IMPLEMENTED (2026-09-27, verified end-to-end) |
 | Heritage Situation (live status) | ⏸ Honest unavailable state — trusted source integration PLANNED |
-| Trusted external ingestion pipeline (Feature H) | 🟡 PARTIAL — provenance via `sources` + verification_status implemented; automated Wikidata/Inheritage ingestion PLANNED |
+| Trusted external ingestion pipeline (Feature H) | 🟡 PARTIAL (advanced) — provenance via `sources` + verification_status + `ExternalReferences` UI + stateless Wikidata proposals (`enrichment.ts`, 4/4 tests); automated approval pipeline PLANNED |
 | About | ✅ Complete |
 | AI Chatbot | ⏸ Under Construction |
 | Documentation | ✅ Complete |
@@ -710,3 +710,27 @@ NO PUSH PERFORMED — documentation only
 - Security spot checks: 401s (no/bad key, admin without session, invalid uuid), 400 (empty login), 404 (upload traversal) — PASS
 - Admin E2E with temporary promoted admin account (deleted after testing) — original `admin@astrova.in` password is unknown/undocumented, so that specific login was not exercised
 - AI chatbot remains Under Construction; crowd info, conservation monitoring, hotel booking and RAG remain future-list (NOT implemented)
+
+---
+
+## Final Verification Pass — Phases 19–35 (2026-09-27, third session)
+
+### Status: COMPLETE — all phases verified; fixes committed on top of `56eea21`
+
+### Phase 19 — Responsive: REAL viewport resizing on 5 pages × 10 widths (1440→360) = 50/50 PASS
+`scrollWidth === clientWidth` at every combination on `/`, `/explore`, `/heritage/amber-fort`, `/heritage`, `/ai`. Only intentional internal scrollers (category chips), clipped Leaflet tiles, and parent-clipped decorative blobs were off-viewport; no page-level overflow, clipped controls, or broken cards.
+
+### Phase 20 — Accessibility: root-caused the duplicate-h1 report + fixed 4 real issues
+- Duplicate h1 = React dev-only streaming artifact (`<div hidden id="S:0">`, excluded from the a11y tree); client-side nav = 1 h1; **production serves/hydrates exactly 1 h1 on `/heritage` and `/explore`**. No source change (dev-only artifact; fixing would risk regressions).
+- Fixed: footer `h4`→`h2` (was skipping after the page's last h2; class-styled so visuals identical), directory sort `<select>` + search inputs got `aria-label`s, 8 image-only card links got `aria-label={item.name}`.
+- Verified: 0 imgs-no-alt / unnamed controls / unlabeled inputs / broken aria refs / heading skips; table semantics; role=status+alert in all VI components (live-confirmed); `:focus-visible` terracotta outline via keyboard; WCAG 2.5.8 touch-target spacing passes (0 violations); all 5 previously-modified files diff-reviewed (intentional only).
+
+### Phases 21–22 — Regression: full 16-step user flow PASS; error matrix 15/15 PASS
+Flow incl. search suggestions (Ctrl+K listbox), map (100 markers), auth/favorites gate + Login-Required modal, collections (6)/detail (21), timeline. Matrix incl. live 429 → browser `role=alert` + Retry; empty nearby returns empty honestly; traversal/invalid IDs 404.
+
+### Phases 23–25 — Provenance/providers/stays
+sources 22 (0 dups, 100% status+retrieved), heritage 96 (0 dup slugs), migration 030 applied, 30/30, UNESCO ICH-linked = 14 exact, four authoritative sources carry URLs+VERIFIED. All providers open data (Open-Meteo, OSM/Overpass, Nominatim chatbot-only, Wikidata CC0); Inheritage not integrated/not claimed; no proprietary providers or provider keys. Stay fields: no price/rating/availability/booking fields anywhere + explicit UI disclaimer.
+**Caveat:** the 22 migration-030 entities have NULL slugs (UUID fallback links; no auto-backfill to avoid unreviewed slug generation).
+
+### Phases 26–28 — Build/test/security/performance
+BE tsc+build, FE tsc, ESLint 0 errors, FE build 13/13; tests 10/10 + 4/4 + 16/16; db-audit 34/34. Security: nothing sensitive tracked/staged, no client key, parameterized SQL, admin `requireAdmin` boundary intact, no stack traces; live 401/401/401/400/401/404 probes PASS (admin full login honestly unverified — credentials unknown). Performance observed: VI 1.19 s cold → 0.079 s warm (cap 200), nearby warm 0.24 s (cap 100), **Overpass cold 13–30 s today** (failed attempt correctly uncached — no poisoning); parallel `Promise.allSettled`; detail-page-only provider calls.

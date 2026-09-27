@@ -263,6 +263,7 @@ function ExploreContent() {
             <div className="relative max-w-md mb-4">
               <SearchInput
                 placeholder="Search locations, heritage sites, states..."
+                aria-label="Search explore"
                 onSearch={handleSearch}
                 value={searchQuery}
               />

@@ -1,5 +1,43 @@
 # Astrova — Project Report
 
+## Final Verification Pass — Phases 19–35 (2026-09-27, third session)
+
+Full re-verification of the shipped code with real-viewport browser measurements, a fresh accessibility audit, the complete user-flow and error-matrix regressions, provenance/provider/stay-boundary reviews, and a final build/test/security/performance run. New findings were fixed, verified, and committed on top of `56eea21`.
+
+### Phase 19 — Responsive (real viewports, not CSS tricks)
+5 pages × 10 required widths (1440/1280/1024/900/768/740/720/430/390/360) = **50/50 measurements PASS** via browser viewport resizing: `/`, `/explore`, `/heritage/amber-fort`, `/heritage`, `/ai`. Every measurement: document `scrollWidth === clientWidth` (0 px horizontal overflow). Off-viewport rectangles were only (a) elements inside intentional `overflow-x-auto` chip/pill scrollers, (b) Leaflet tiles inside the clipped map container, and (c) decorative blobs inside `overflow-hidden` cards — all identified, none leaking scroll to the page. No clipped controls, broken cards, or broken scroll regions; visual spot checks at 360/390 clean.
+
+### Phase 20 — Accessibility audit & fixes
+- **Reported duplicate h1 resolved by root-cause analysis:** `/heritage` and `/explore` showed two identical h1s in the DOM on dev full-page loads. Both h1s were the same heading; the second lives in `<div hidden id="S:0">` — a React dev-mode streaming/Suspense artifact, excluded from the accessibility tree by the `hidden` attribute. Evidence: client-side navigation renders 1 h1; **production build (`next start`) serves and hydrates exactly 1 h1 with 0 hidden segments on both pages**. No source change made (fixing a dev-only artifact would risk real regressions); the semantic/AT/SEO document has one h1.
+- **Real issues found & fixed:** footer column headings were `h4` skipping from the page's last `h2` → now `h2` (class-styled, zero visual change, 0 heading skips everywhere); directory sort `<select>` had no accessible name → `aria-label`; directory + explore search inputs relied on placeholder only → `aria-label`; 8 image-header card links (icon-fallback cards without images) had no accessible name → `aria-label={item.name}`.
+- Verified across home/explore/directory/detail/admin: 0 imgs-without-alt, 0 unnamed buttons/links, 0 unlabeled inputs, 0 broken `aria-labelledby/describedby` refs, 0 heading-level skips, table semantics (caption + `th`), all 39 detail-page SVGs properly hidden/labeled, `role=status`/`role=alert` present in all four VI components (live-confirmed during induced failure), keyboard Tab focus shows the global terracotta `:focus-visible` outline, touch targets pass WCAG 2.5.8 (0 targets violate the 24 px spacing rule; checkbox inputs wrapped in labels).
+- All 5 previously-modified files diff-reviewed: intentional changes only, no accidental text/layout edits.
+
+### Phase 21 — Full user-flow regression
+DISCOVER → SEARCH (directory filter + Ctrl+K global modal with `listbox/option` suggestions) → SELECT → STORY → MEDIA → LOCATION → RELATED → VISITOR INTELLIGENCE → WEATHER/HUMIDITY/AQI → BEST TIME → COST → NEARBY HERITAGE → PLACES → STAYS → CONTINUE ("Want to explore this heritage further?" + period/timeline/directory links) — **all PASS**. Also PASS: auth (labeled form, Sign In/Create Account), favorites (logged-out gate + anonymous-favorite "Login Required" modal), collections (6) + detail (21 entities), timeline (periods BCE/CE), map (100 markers, OSM attribution, zoom/state/category controls), search suggestions.
+
+### Phase 22 — Visitor-intelligence error matrix (15/15)
+1 valid coords (200, live data) · 2 missing coords (`location_unavailable` + truthful error) · 3 null coords (DB 0/54 + code rejects) · 4 invalid range (DB 0 + code range check) · 5 exact (0,0) (DB 0 + `hasRealCoordinates` rejects) · 6 weather timeout (5 s abort) · 7 AQI timeout (isolated via `Promise.allSettled`) · 8 Overpass timeout (15 s abort) · 9 Overpass 504 (mirror fallback) · 10 both mirrors down (loop throws → heritage-only + explicit error) · 11 empty nearby (remote entities: places/stays 0 with empty `errors[]`, nothing fabricated) · 12 malformed payloads (10/10 unit checks) · 13 rate limit (live burn → `429 RATE_LIMITED` truthful body; **browser renders `role=alert` "Live conditions are temporarily unavailable…" + Retry**) · 14 invalid UUID → 404 · 15 traversal/junk IDs → 404 ×2. **No case converts missing data into fake data.**
+
+### Phase 23 — Data provenance
+sources **22** (0 duplicate titles, 100% with `verification_status` + `retrieved_date`), heritage **96** (0 duplicate slugs among non-null), migration `030_p1_authoritative_sources.sql` applied, `_migrations` **30/30**. The four authoritative sources carry URLs + VERIFIED status (Indian Culture Portal, Incredible India, UNESCO ICH, National Archives of India). **UNESCO ICH-linked entities = exactly 14** (+14 more on UNESCO World Heritage List). No existing data replaced. **Honest caveat:** the 22 entities added by migration 030 (ICH 14 + Incredible India 8) have `slug IS NULL` — links fall back to UUIDs (designed-for `slug || id`), so nothing breaks, but slugs were not auto-backfilled to avoid unreviewed slug generation. Feature H remains **PARTIAL** (stateless proposals implemented; approval pipeline PLANNED).
+
+### Phase 24 — Open-data providers
+All external calls are open data: Open-Meteo Forecast + Air Quality (keyless, 10-min/200-entry cache, 5 s abort, stale-reuse + `errors[]`, never caches weather-less responses, UI + `sources[]` attribution), Overpass OSM (`overpass-api.de` → `overpass.kumi.systems` mirror, ODbL, 6-h/100-entry cache, 15 s abort, footer attribution), OSM tiles (browser), Nominatim (chatbot geocoding only — chatbot UI under construction), Wikidata (CC0 — enrichment proposals). `airnow.gov` appears only as a documentation reference for US AQI bands. **Inheritage: not integrated (0 references), not claimed.** No proprietary providers; no provider API keys exist.
+
+### Phase 25 — Stay boundary
+Stay API field union: `name, kind, distanceKm, lat, lon, address, phone, stars, website` — **0 banned fields** (no price/rating/availability/booking). UI shows an explicit disclaimer: "Astrova does not show room prices, live availability or ratings — check with the property directly."
+
+### Phase 26 — Build/type/test (exact results)
+Backend `tsc` PASS · backend build PASS · `test-visitor-intelligence` **10/10** · `test-enrichment` **4/4** · `test-visit-module` **16/16** · `db-audit` **34/34** · Frontend `tsc` PASS · ESLint `--quiet` on all changed files **0 errors** · frontend production build **13/13 pages**.
+
+### Phase 27 — Security
+Tracked files: only `.env.example` (no `.env`/keys/logs tracked or staged) · no `NEXT_PUBLIC` secret (only comments stating the key is not exposed) · `DEMO_API_KEY` absent from the client bundle · zero raw SQL template interpolation · admin route boundary intact (`router.use(requireAdmin)`; login route public pre-boundary) · error responses carry no stack traces · live probes: no-key **401**, bad-key **401**, admin no-session **401**, admin empty login **400**, nearby no-key **401**, uploads traversal **404**. Admin full login with the original `admin@astrova.in` credentials remains **unverified** (password unknown) — claimed nowhere.
+
+### Phase 28 — Performance (observed, not hidden)
+Visitor-intelligence cache: **cold 1.19 s → warm 0.079 s** (TTL 10 min, cap 200). Nearby cache: warm **0.24 s** (TTL 6 h, cap 100). **Overpass cold latency observed today: 12.98 s and 30.16 s** (primary endpoint slow; first attempt failed after both-endpoint timeouts and was correctly *not* cached — next attempt succeeded and then served from cache, demonstrating no failure poisoning). Weather and AQI fetch in parallel via `Promise.allSettled`; provider calls only occur on heritage detail pages; failed requests never populate caches (weather-less responses are never cached).
+
+
 ## Admin Portal Overhaul, Data Accuracy & Open-Data Hardening (2026-09-27, second session)
 
 Session scope: fix admin-portal bugs found in a user report (site chrome leaking onto `/admin`, broken media upload, missing CRUD, unsafe deletes), fix two live data-accuracy bugs on public pages, harden the visitor-intelligence data path, then run full verification. All work stays heritage-first, open-data and source-grounded; no feature was fabricated and the AI chatbot remains Under Construction.
@@ -115,10 +153,11 @@ Full audit performed (87 evidence-backed checks: 55 API/security/isolation, 20 D
 
 ## Database
 
-- **14 tables**, **27 sequential migrations**
+- **14 tables** (15 content tables + `_migrations` bookkeeping)
 - Neon PostgreSQL (serverless)
-- 298,241 total records
-- Tables: heritage_entities (74), media (72), locations (54), sources (18), historical_periods (9), collections (6), collection_items (98), heritage_relationships (49), supported_states (12), users (2+), user_favorites, chatbot_knowledge (107), conversations, conversation_messages
+- Current verified counts: heritage_entities **96**, locations **54**, media **72**, sources **22**, relationships **49**, collections **6**, collection_items **98**, historical_periods **9**, supported_states **12**, migrations **30/30**
+- Earlier sessions showed 74/18 — superseded by migration 030 (see HVI connectivity-audit section)
+- Tables: heritage_entities, media, locations, sources, historical_periods, collections, collection_items, heritage_relationships, supported_states, users, user_favorites, chatbot_knowledge, conversations, conversation_messages
 
 ---
 
@@ -268,7 +307,7 @@ Expanded the visitor-information section into the full Heritage Visit Intelligen
 
 ### Verification (all executed 2026-09-27)
 
-- DB audit 34/34; migrations 30/30; unit tests 7/7 + 16/16; typecheck backend + frontend; backend build; frontend production build 13/13 pages — PASS
+- DB audit 34/34; migrations 30/30; unit tests 7/7 + 16/16 at first pass (**later expanded to 10/10 + new enrichment 4/4** — see the session-2 and final-pass sections); typecheck backend + frontend; backend build; frontend production build 13/13 pages — PASS
 - E2E browser on amber-fort (conditions, AQI, best time, forecast, situation, cost, nearby) and adalaj-stepwell (no-coordinates states) — PASS
 - Failure states: backend down, rate-limit 429 with UI retry, provider-failure message split, 404 unknown ids, junk-parameter clamping, 401 without key — PASS
 - Responsive: no horizontal overflow at 1440/1280/1024/900/768/740/720/430/390/360 — PASS

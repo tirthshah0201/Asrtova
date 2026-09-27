@@ -186,6 +186,9 @@ table(
         ["Frontend production build", "PASS (13/13 pages; fixed pre-existing /explore Suspense failure)"],
         ["API regression (direct + proxy)", "19 + 15 endpoints 200; auth chain 201/200/200; admin 401/403"],
         ["E2E browser (amber-fort, adalaj-stepwell)", "PASS — all cards, states, retry paths"],
+        ["Final pass: responsive (5 pages × 10 real viewports)", "PASS — 50/50, zero horizontal overflow"],
+        ["Final pass: accessibility audit + fixes", "PASS — 0 heading skips / unnamed controls / unlabeled inputs; footer h2 fix; focus outline + touch-target spacing verified"],
+        ["Final pass: user flow (16 steps) + error matrix (15 cases)", "PASS — incl. live 429 → role=alert + Retry, empty-nearby honesty, traversal 404"],
         ["Failure states (backend down, 429, provider fail, 404, junk input)", "PASS"],
         ["Responsive 1440/1280/1024/900/768/740/720/430/390/360", "PASS — no horizontal overflow"],
         ["Regression: home, explore, heritage, detail, timeline, collections, auth, favorites, admin, media, about, AI placeholder", "PASS (AI still Under Construction)"],
@@ -207,6 +210,8 @@ bullets([
     "Overpass/OSM coverage is uneven in rural areas; up to 6h stale cache (labelled).",
     "No hotel prices, availability or ratings by design.",
     "In-memory caches/limits are single-server; admin full login not re-verified (no credentials available).",
+    "22 migration-030 entities have NULL slugs (UUID fallback links; no unreviewed slug backfill).",
+    "Overpass cold latency varies (9-10 s typical; 13-30 s observed in final verification; failed attempts never cached).",
 ])
 
 h1("12. Future improvements")
@@ -224,7 +229,7 @@ table(
         ["Features A, C, D, E, F, G", "IMPLEMENTED & VERIFIED end-to-end"],
         ["Feature B (situation)", "IMPLEMENTED (honest unavailable state); live-status source PLANNED"],
         ["Feature H (trusted data)", "PARTIAL (advanced) — provenance + ExternalReferences UI + stateless Wikidata proposals (4/4); approval/DB-write pipeline PLANNED"],
-        ["Regression suite", "PASS (second session: 10/10 + 4/4 + 16/16 + 34/34; tsc/eslint/builds green)"],
+        ["Regression suite", "PASS (10/10 + 4/4 + 16/16 + 34/34; final pass re-verified flow, error matrix, a11y, responsive)"],
         ["Git", "branch main · new commit on top of dfc48eb · pushed to https://github.com/tirthshah0201/Asrtova.git (see report.md GitHub Status)"],
     ],
 )

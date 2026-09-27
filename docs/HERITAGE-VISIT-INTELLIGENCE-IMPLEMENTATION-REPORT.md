@@ -211,6 +211,8 @@ Verified after the changes: homepage · explore (search + Leaflet map) · herita
 - Coordinates are city/location-level, so weather is location-level, not monument micro-climate.
 - In-memory caches/limits are single-server.
 - Admin full login not re-verified (credentials unavailable in this environment).
+- The 22 entities added by migration 030 have `slug IS NULL` (linked by UUID fallback `slug || id`); slugs were not auto-backfilled to avoid unreviewed slug generation.
+- Overpass cold latency is variable: 9–10 s historically, **13–30 s observed during the final verification pass** (15 s per-endpoint timeout + mirror bounds the worst case to ~30 s; failed attempts are never cached).
 
 ## 25. Deferred work
 
@@ -249,3 +251,17 @@ Scope of the follow-up session as it affects this module:
 5. **Verification refresh** — `test-visitor-intelligence` 7/7 → **10/10**, new `test-enrichment` **4/4**, `test-visit-module` **16/16**, `db-audit` **34/34**, backend+frontend tsc/build/eslint green, browser regression + a11y + security spot checks PASS.
 
 Not changed: AI chatbot (still Under Construction), heritage situation honesty, cost `officialFee: null`, no hotel prices/ratings, no RAG/crowd/conservation features.
+
+## 28. Final verification pass (2026-09-27, third session — phases 19–35)
+
+Independent re-verification of the shipped implementation; evidence added wherever it strengthens §18–§23:
+
+1. **Responsive (§21):** real browser viewport resizing, 5 pages × 10 widths = **50/50** with `scrollWidth === clientWidth`; off-viewport elements were only intentional chip scrollers, clipped Leaflet tiles, and parent-clipped decorative blobs.
+2. **Accessibility (§20):** root-caused the reported duplicate h1 (React dev-only `<div hidden id="S:0">` streaming artifact; production hydrates exactly 1 h1 on `/heritage` and `/explore`; hidden content is excluded from the a11y tree). Fixed genuine issues: footer `h4`→`h2` (heading-order skip), `aria-label` on the directory sort select and search inputs, `aria-label` on 8 icon-fallback card links. Post-fix: 0 heading skips, 0 unnamed controls, 0 unlabeled inputs; `role=status`/`role=alert` live-confirmed during induced failure; keyboard focus outline confirmed; WCAG 2.5.8 spacing audit → 0 violations.
+3. **User flow (§23):** 16-step flow PASS end-to-end incl. Ctrl+K search suggestions (`listbox/option`), map (100 markers), favorites Login-Required modal, collections/timeline.
+4. **Error matrix:** 15/15 PASS incl. live rate-limit burn → `429 RATE_LIMITED` + browser `role=alert` + Retry; empty nearby returns empty with `errors: []`; traversal/invalid IDs → 404.
+5. **Provenance (§11):** sources 22 (no duplicate titles, 100% verification_status + retrieved_date), heritage 96 (no duplicate slugs), migration 030 applied, 30/30, UNESCO-ICH-linked entities = exactly 14.
+6. **Providers (§13–14):** confirmed all-open-data set; Inheritage not integrated and not claimed; no proprietary provider or provider key exists.
+7. **Stays (§24):** API field union contains no price/rating/availability/booking field; explicit UI disclaimer present.
+8. **Performance (§19, observed):** VI cold 1.19 s → warm 0.079 s; nearby warm 0.24 s; Overpass cold 13–30 s this day (failed attempt correctly uncached — failure-poisoning check passed).
+9. **Build/test/security:** BE+FE tsc, both builds (13/13), ESLint 0 errors, tests 10/10 + 4/4 + 16/16, db-audit 34/34, live 401/401/401/400/401/404 probes PASS.
