@@ -108,10 +108,10 @@ export function HeritagePopup({
         <button
           onClick={() => onAskAI?.({ name, state, category: type })}
           className="flex-1 flex items-center justify-center gap-1.5 px-3 py-1.5 bg-red-600 text-white text-xs font-medium rounded-md hover:bg-red-700 transition-colors cursor-pointer"
-          title="AI chatbot — Under Construction"
+          title="Ask Astrova about this place"
         >
           <Sparkles className="h-3 w-3" />
-          Ask AI • Under Construction
+          Ask AI
         </button>
         <a
           href={detailHref}

@@ -35,6 +35,26 @@ interface Situation {
   reason: string;
   source: { name: string; url: string } | null;
   checkedAt: string;
+  /* Phase 37 Part C/D — schedule-aware fields (optional for older payloads) */
+  timezone?: string;
+  localTime?: string;
+  today?: {
+    dayName?: string;
+    open: string | null;
+    close: string | null;
+    isClosed: boolean;
+    is24Hours: boolean;
+  } | null;
+  nextChange?: {
+    kind: "opens" | "closes";
+    dayOffset: number;
+    at: string;
+    onDate?: string;
+    inMinutes: number;
+  } | null;
+  dataOrigin?: string;
+  conflict?: boolean;
+  scheduleStatus?: string;
 }
 
 interface VisitorData {
@@ -163,12 +183,75 @@ export function LiveVisitorIntelligence({ heritageId, hasCoordinates }: VisitorI
                 <ShieldAlert className="h-5 w-5 text-heritage-gold" aria-hidden="true" />
               </div>
               <div className="min-w-0">
-                <p className="text-xs font-medium uppercase tracking-wider text-muted">Heritage situation</p>
-                <p className="mt-1 font-display text-lg text-charcoal">{data.situation.label}</p>
+                <p className="text-xs font-medium uppercase tracking-wider text-muted">
+                  Current situation
+                  {data.situation.localTime && (
+                    <span className="ml-2 normal-case tracking-normal">
+                      · {data.situation.localTime}
+                      {data.situation.timezone ? ` (${data.situation.timezone})` : ""}
+                    </span>
+                  )}
+                </p>
+                <p className="mt-1 flex items-center gap-2 font-display text-lg text-charcoal">
+                  <span
+                    aria-hidden="true"
+                    className={`inline-block h-2.5 w-2.5 rounded-full ${
+                      data.situation.status === "OPEN" || data.situation.status === "OPEN_24_HOURS"
+                        ? "bg-emerald-500"
+                        : data.situation.status === "CLOSING_SOON" || data.situation.status === "OPENING_SOON"
+                        ? "bg-amber-500"
+                        : data.situation.status === "CLOSED" || data.situation.status === "CLOSED_TODAY"
+                        ? "bg-stone-400"
+                        : "bg-stone-300"
+                    }`}
+                  />
+                  {data.situation.label}
+                </p>
                 <p className="mt-1 text-sm leading-relaxed text-muted">{data.situation.reason}</p>
+
+                {/* Today's schedule + next change (Part T structure) */}
+                {data.situation.today && !data.situation.today.isClosed && (
+                  <p className="mt-2 text-sm text-charcoal">
+                    <span className="text-muted">Today:{" "}</span>
+                    {data.situation.today.is24Hours
+                      ? "Open 24 hours"
+                      : `${data.situation.today.open ?? "—"} – ${data.situation.today.close ?? "—"}`}
+                    {data.situation.nextChange && data.situation.nextChange.inMinutes > 0 && (
+                      <span className="text-muted">
+                        {" · "}
+                        {data.situation.nextChange.kind === "closes" ? "Closes" : "Opens"} in about{" "}
+                        {data.situation.nextChange.inMinutes >= 60
+                          ? `${Math.floor(data.situation.nextChange.inMinutes / 60)}h ${data.situation.nextChange.inMinutes % 60}m`
+                          : `${data.situation.nextChange.inMinutes}m`}
+                      </span>
+                    )}
+                  </p>
+                )}
+                {data.situation.today?.isClosed && (
+                  <p className="mt-2 text-sm text-muted">
+                    Today: closed
+                    {data.situation.nextChange && (
+                      <>
+                        {" · Opens "}
+                        {data.situation.nextChange.dayOffset === 0
+                          ? "today"
+                          : data.situation.nextChange.dayOffset === 1
+                          ? "tomorrow"
+                          : `in ${data.situation.nextChange.dayOffset} days`}
+                        {" at "}
+                        {data.situation.nextChange.at}
+                      </>
+                    )}
+                  </p>
+                )}
+
+                {/* Honest origin label (Part X) */}
                 <p className="mt-2 text-xs text-muted">
-                  Astrova shows a status only when a trusted source provides one — check the official
-                  sources in &ldquo;Sources &amp; References&rdquo; before travelling.
+                  {data.situation.status === "INFORMATION_UNAVAILABLE"
+                    ? "INFORMATION UNAVAILABLE — no trustworthy schedule exists for this site yet."
+                    : data.situation.dataOrigin === "DEMO"
+                    ? "Demo hours — not verified. Check official sources before travelling."
+                    : "Schedule from a recorded source — check official sources before travelling."}
                   {data.situation.source && (
                     <> Last checked {formatUpdated(data.situation.checkedAt)}.</>
                   )}

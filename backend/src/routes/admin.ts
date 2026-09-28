@@ -23,6 +23,12 @@ import {
   syncProposals,
   scanPossibleDuplicates,
 } from "../services/enrichmentReview";
+import { DAY_NAMES, validateSchedule } from "../services/operatingHours";
+import { DEMO_PLACE_CATEGORIES, demoPlacesStats } from "../services/demoPlaces";
+import { embeddingDimensions, embeddingModelName } from "../services/rag/embed";
+import { pgvectorAvailable } from "../services/rag/retrieve";
+import { getGenerationStatus } from "../services/rag/generate";
+import { ingestKnowledge } from "../services/rag/knowledge";
 
 const router = Router();
 
@@ -1668,6 +1674,389 @@ router.get("/enrichment/duplicates", async (req, res) => {
   } catch (err) {
     console.error("[Admin Enrichment] Duplicate scan error:", (err as Error).message);
     res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Duplicate scan failed." } });
+  }
+});
+
+/* ============================================================
+   Phase 37 — Operating hours (Part U: admin-only data management)
+   ============================================================ */
+
+const ALLOWED_SCHEDULE_STATUS = ["VERIFIED", "DEMO", "CONFLICT", "ASTROVA_ESTIMATE"] as const;
+const ALLOWED_VERIFICATION = ["UNVERIFIED", "REVIEWED", "VERIFIED"] as const;
+const ALLOWED_HOURS_SOURCE_TYPE = [
+  "OFFICIAL", "GOVERNMENT", "UNESCO", "ASI", "TOURISM", "ACADEMIC", "MUSEUM",
+  "ARCHIVE", "NEWS", "CULTURAL_INSTITUTION", "OPEN_DATASET", "OTHER", "DEMO",
+] as const;
+const DATE_RE = /^\d{4}-\d{2}-\d{2}$/;
+
+/** GET /api/admin/operating-hours?heritageId= */
+router.get("/operating-hours", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const heritageId = (req.query.heritageId as string) || null;
+    if (heritageId && !isValidUUID(heritageId)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "heritageId must be a UUID." } });
+      return;
+    }
+    const { rows } = await query(
+      `SELECT h.id, h.heritage_id, e.name AS heritage_name, h.day_of_week,
+              h.open_time::text AS open_time, h.close_time::text AS close_time,
+              h.is_closed, h.is_24_hours, h.special_note, h.source_id, h.source_url,
+              h.source_type, h.schedule_status, h.verification_status,
+              h.effective_from::text AS effective_from, h.effective_until::text AS effective_until,
+              h.updated_at
+         FROM heritage_operating_hours h
+         JOIN heritage_entities e ON e.id = h.heritage_id
+        WHERE ($1::uuid IS NULL OR h.heritage_id = $1)
+        ORDER BY e.name, h.day_of_week`,
+      [heritageId]
+    );
+    res.json({ success: true, data: { rows, count: rows.length, dayNames: DAY_NAMES } });
+  } catch (err) {
+    console.error("[Admin Hours] List error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not list operating hours." } });
+  }
+});
+
+/** POST /api/admin/operating-hours */
+router.post("/operating-hours", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const {
+      heritageId, dayOfWeek, openTime, closeTime, isClosed, is24Hours,
+      specialNote, sourceId, sourceUrl, sourceType, scheduleStatus,
+      verificationStatus, effectiveFrom, effectiveUntil,
+    } = req.body || {};
+
+    if (!heritageId || !isValidUUID(heritageId)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "heritageId must be a UUID." } });
+      return;
+    }
+    const shapeError = validateSchedule({
+      dayOfWeek: Number(dayOfWeek),
+      openTime: openTime ?? null,
+      closeTime: closeTime ?? null,
+      isClosed: Boolean(isClosed),
+      is24Hours: Boolean(is24Hours),
+    });
+    if (shapeError) {
+      res.status(400).json({ success: false, error: { code: "INVALID_SCHEDULE", message: shapeError } });
+      return;
+    }
+    if (sourceUrl && !/^https?:\/\//i.test(String(sourceUrl))) {
+      res.status(400).json({ success: false, error: { code: "INVALID_URL", message: "sourceUrl must be http(s)." } });
+      return;
+    }
+    if (scheduleStatus && !ALLOWED_SCHEDULE_STATUS.includes(scheduleStatus)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_STATUS", message: `scheduleStatus must be one of ${ALLOWED_SCHEDULE_STATUS.join(", ")}.` } });
+      return;
+    }
+    if (verificationStatus && !ALLOWED_VERIFICATION.includes(verificationStatus)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_STATUS", message: `verificationStatus must be one of ${ALLOWED_VERIFICATION.join(", ")}.` } });
+      return;
+    }
+    if (sourceType && !ALLOWED_HOURS_SOURCE_TYPE.includes(sourceType)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_SOURCE_TYPE", message: `sourceType must be one of ${ALLOWED_HOURS_SOURCE_TYPE.join(", ")}.` } });
+      return;
+    }
+    for (const [label, value] of [["effectiveFrom", effectiveFrom], ["effectiveUntil", effectiveUntil]] as const) {
+      if (value && !DATE_RE.test(String(value))) {
+        res.status(400).json({ success: false, error: { code: "INVALID_DATE", message: `${label} must be YYYY-MM-DD.` } });
+        return;
+      }
+    }
+
+    const entity = await query<{ id: string }>(`SELECT id FROM heritage_entities WHERE id = $1`, [heritageId]);
+    if (entity.rows.length === 0) {
+      res.status(404).json({ success: false, error: { code: "NOT_FOUND", message: "Heritage entity not found." } });
+      return;
+    }
+
+    const existing = await query<{ id: string }>(
+      `SELECT id FROM heritage_operating_hours
+        WHERE heritage_id = $1 AND day_of_week = $2
+          AND effective_from IS NOT DISTINCT FROM $3::date
+          AND effective_until IS NOT DISTINCT FROM $4::date`,
+      [heritageId, Number(dayOfWeek), effectiveFrom || null, effectiveUntil || null]
+    );
+    if (existing.rows.length > 0) {
+      res.status(409).json({ success: false, error: { code: "DUPLICATE_SCHEDULE", message: "A schedule row already exists for that heritage, day and effective range." } });
+      return;
+    }
+
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO heritage_operating_hours
+         (heritage_id, day_of_week, open_time, close_time, is_closed, is_24_hours,
+          special_note, source_id, source_url, source_type, schedule_status,
+          verification_status, effective_from, effective_until)
+       VALUES ($1,$2,$3::time,$4::time,$5,$6,$7,$8,$9,$10,$11,$12,$13::date,$14::date)
+       RETURNING id`,
+      [
+        heritageId, Number(dayOfWeek),
+        openTime || null, closeTime || null,
+        Boolean(isClosed), Boolean(is24Hours),
+        specialNote || null, sourceId || null, sourceUrl || null,
+        sourceType || "DEMO", scheduleStatus || "DEMO",
+        verificationStatus || "UNVERIFIED",
+        effectiveFrom || null, effectiveUntil || null,
+      ]
+    );
+    res.status(201).json({ success: true, data: { id: rows[0].id } });
+  } catch (err) {
+    console.error("[Admin Hours] Create error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not create schedule row." } });
+  }
+});
+
+/** PUT /api/admin/operating-hours/:id */
+router.put("/operating-hours/:id", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const id = req.params.id;
+    if (!isValidUUID(id)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "id must be a UUID." } });
+      return;
+    }
+    const current = await query<{
+      [key: string]: unknown; day_of_week: number; open_time: string | null;
+      close_time: string | null; is_closed: boolean; is_24_hours: boolean;
+    }>(`SELECT * FROM heritage_operating_hours WHERE id = $1`, [id]);
+    if (current.rows.length === 0) {
+      res.status(404).json({ success: false, error: { code: "NOT_FOUND", message: "Schedule row not found." } });
+      return;
+    }
+    const row = current.rows[0];
+    const body = req.body || {};
+    const next = {
+      dayOfWeek: body.dayOfWeek === undefined ? row.day_of_week : Number(body.dayOfWeek),
+      openTime: body.openTime === undefined ? row.open_time : body.openTime,
+      closeTime: body.closeTime === undefined ? row.close_time : body.closeTime,
+      isClosed: body.isClosed === undefined ? row.is_closed : Boolean(body.isClosed),
+      is24Hours: body.is24Hours === undefined ? row.is_24_hours : Boolean(body.is24Hours),
+    };
+    const shapeError = validateSchedule(next);
+    if (shapeError) {
+      res.status(400).json({ success: false, error: { code: "INVALID_SCHEDULE", message: shapeError } });
+      return;
+    }
+    const status = body.scheduleStatus ?? row.schedule_status;
+    if (!ALLOWED_SCHEDULE_STATUS.includes(status as typeof ALLOWED_SCHEDULE_STATUS[number])) {
+      res.status(400).json({ success: false, error: { code: "INVALID_STATUS", message: `scheduleStatus must be one of ${ALLOWED_SCHEDULE_STATUS.join(", ")}.` } });
+      return;
+    }
+    const verification = body.verificationStatus ?? row.verification_status;
+    if (!ALLOWED_VERIFICATION.includes(verification as typeof ALLOWED_VERIFICATION[number])) {
+      res.status(400).json({ success: false, error: { code: "INVALID_STATUS", message: `verificationStatus must be one of ${ALLOWED_VERIFICATION.join(", ")}.` } });
+      return;
+    }
+
+    await query(
+      `UPDATE heritage_operating_hours
+          SET day_of_week = $2, open_time = $3::time, close_time = $4::time,
+              is_closed = $5, is_24_hours = $6, special_note = $7,
+              source_url = $8, schedule_status = $9, verification_status = $10
+        WHERE id = $1`,
+      [
+        id, next.dayOfWeek, next.openTime, next.closeTime, next.isClosed, next.is24Hours,
+        body.specialNote === undefined ? row.special_note : body.specialNote || null,
+        body.sourceUrl === undefined ? row.source_url : body.sourceUrl || null,
+        status, verification,
+      ]
+    );
+    res.json({ success: true, data: { id } });
+  } catch (err) {
+    console.error("[Admin Hours] Update error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not update schedule row." } });
+  }
+});
+
+/** DELETE /api/admin/operating-hours/:id */
+router.delete("/operating-hours/:id", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const id = req.params.id;
+    if (!isValidUUID(id)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "id must be a UUID." } });
+      return;
+    }
+    const result = await query(`DELETE FROM heritage_operating_hours WHERE id = $1`, [id]);
+    if (!result.rowCount) {
+      res.status(404).json({ success: false, error: { code: "NOT_FOUND", message: "Schedule row not found." } });
+      return;
+    }
+    res.json({ success: true, data: { deleted: true, id } });
+  } catch (err) {
+    console.error("[Admin Hours] Delete error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not delete schedule row." } });
+  }
+});
+
+/* ============================================================
+   Phase 37 — DEMO nearby records (Part U)
+   ============================================================ */
+
+/** GET /api/admin/demo-places?heritageId= */
+router.get("/demo-places", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const heritageId = (req.query.heritageId as string) || null;
+    if (heritageId && !isValidUUID(heritageId)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "heritageId must be a UUID." } });
+      return;
+    }
+    const { rows } = await query(
+      `SELECT d.id, d.heritage_id, e.name AS heritage_name, d.name, d.category,
+              d.latitude, d.longitude, d.address, d.phone, d.website,
+              d.source_type, d.source_url, d.verification_status, d.updated_at
+         FROM demo_places d
+         JOIN heritage_entities e ON e.id = d.heritage_id
+        WHERE ($1::uuid IS NULL OR d.heritage_id = $1)
+        ORDER BY e.name, d.category, d.name`,
+      [heritageId]
+    );
+    const stats = await demoPlacesStats();
+    res.json({ success: true, data: { rows, count: rows.length, stats, categories: DEMO_PLACE_CATEGORIES } });
+  } catch (err) {
+    console.error("[Admin Demo] List error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not list demo places." } });
+  }
+});
+
+/** POST /api/admin/demo-places — always stored as DEMO / UNVERIFIED. */
+router.post("/demo-places", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const { heritageId, name, category, latitude, longitude, address, phone, website, sourceUrl } = req.body || {};
+    if (!heritageId || !isValidUUID(heritageId)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "heritageId must be a UUID." } });
+      return;
+    }
+    if (!name || typeof name !== "string" || !name.trim()) {
+      res.status(400).json({ success: false, error: { code: "INVALID_NAME", message: "name is required." } });
+      return;
+    }
+    if (!DEMO_PLACE_CATEGORIES.includes(category)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_CATEGORY", message: `category must be one of ${DEMO_PLACE_CATEGORIES.join(", ")}.` } });
+      return;
+    }
+    const lat = Number(latitude);
+    const lon = Number(longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon) || Math.abs(lat) > 90 || Math.abs(lon) > 180 || (lat === 0 && lon === 0)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_COORDINATES", message: "latitude/longitude must be valid coordinates (no Null Island)." } });
+      return;
+    }
+    if (website && !/^https?:\/\//i.test(String(website))) {
+      res.status(400).json({ success: false, error: { code: "INVALID_URL", message: "website must be http(s)." } });
+      return;
+    }
+    const duplicate = await query<{ id: string }>(
+      `SELECT id FROM demo_places WHERE heritage_id = $1 AND category = $2 AND name = $3`,
+      [heritageId, category, name.trim()]
+    );
+    if (duplicate.rows.length > 0) {
+      res.status(409).json({ success: false, error: { code: "DUPLICATE_PLACE", message: "That demo place already exists for this entity and category." } });
+      return;
+    }
+    const { rows } = await query<{ id: string }>(
+      `INSERT INTO demo_places (heritage_id, name, category, latitude, longitude, address, phone, website, source_url)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9) RETURNING id`,
+      [heritageId, name.trim(), category, lat, lon, address || null, phone || null, website || null, sourceUrl || null]
+    );
+    res.status(201).json({ success: true, data: { id: rows[0].id, source_type: "DEMO", verification_status: "UNVERIFIED" } });
+  } catch (err) {
+    console.error("[Admin Demo] Create error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not create demo place." } });
+  }
+});
+
+/** DELETE /api/admin/demo-places/:id */
+router.delete("/demo-places/:id", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const id = req.params.id;
+    if (!isValidUUID(id)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "id must be a UUID." } });
+      return;
+    }
+    const result = await query(`DELETE FROM demo_places WHERE id = $1`, [id]);
+    if (!result.rowCount) {
+      res.status(400).json({ success: false, error: { code: "NOT_FOUND", message: "Demo place not found." } });
+      return;
+    }
+    res.json({ success: true, data: { deleted: true, id } });
+  } catch (err) {
+    console.error("[Admin Demo] Delete error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not delete demo place." } });
+  }
+});
+
+/* ============================================================
+   Phase 37 — RAG status + ingestion (Part U)
+   ============================================================ */
+
+/** GET /api/admin/rag/status */
+router.get("/rag/status", async (_req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const [pgvector, counts, lastRun, generation] = await Promise.all([
+      pgvectorAvailable(),
+      query<{ total: string; embedded: string; languages: string; tiers: string; verified: string }>(
+        `SELECT count(*) AS total,
+                count(*) FILTER (WHERE embedding IS NOT NULL) AS embedded,
+                (SELECT jsonb_object_agg(language, n) FROM (SELECT language, count(*) n FROM rag_chunks GROUP BY language) l) AS languages,
+                (SELECT jsonb_object_agg(coalesce(authority_tier::text, 'unrated'), n) FROM (SELECT authority_tier, count(*) n FROM rag_chunks GROUP BY authority_tier) t) AS tiers,
+                count(*) FILTER (WHERE verification_status = 'VERIFIED') AS verified
+           FROM rag_chunks`
+      ),
+      query<{ model: string; chunks_seen: number; chunks_inserted: number; status: string; started_at: string; finished_at: string | null; error: string | null }>(
+        `SELECT model, chunks_seen, chunks_inserted, status, started_at, finished_at, error
+           FROM rag_ingest_runs ORDER BY started_at DESC LIMIT 1`
+      ),
+      getGenerationStatus(),
+    ]);
+    const row = counts.rows[0];
+    res.json({
+      success: true,
+      data: {
+        pgvector,
+        embedding: {
+          model: embeddingModelName(),
+          dimensions: embeddingDimensions(),
+          dtype: process.env.RAG_EMBEDDING_DTYPE || "q8",
+        },
+        chunks: {
+          total: Number(row?.total || 0),
+          embedded: Number(row?.embedded || 0),
+          verified: Number(row?.verified || 0),
+          languages: row?.languages || {},
+          tiers: row?.tiers || {},
+        },
+        lastRun: lastRun.rows[0] || null,
+        generation,
+        note: "No chunk may carry verification_status REJECTED; rejected enrichment is excluded by schema.",
+      },
+    });
+  } catch (err) {
+    console.error("[Admin RAG] Status error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Could not read RAG status." } });
+  }
+});
+
+/** POST /api/admin/rag/ingest — rebuild the knowledge base (idempotent). */
+router.post("/rag/ingest", async (_req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const report = await ingestKnowledge();
+    res.status(report.status === "FAILED" ? 502 : 200).json({
+      success: report.status !== "FAILED",
+      data: report,
+      ...(report.status === "FAILED"
+        ? { error: { code: "INGEST_FAILED", message: report.error || "Ingestion failed." } }
+        : {}),
+    });
+  } catch (err) {
+    console.error("[Admin RAG] Ingest error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Ingestion failed." } });
   }
 });
 

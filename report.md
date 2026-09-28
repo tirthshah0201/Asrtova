@@ -1,5 +1,79 @@
 # Astrova — Project Report
 
+## Phase 37 — Heritage Situation, Operating Hours, Controlled Demo Nearby Data & RAG Chatbot (2026-09-29)
+
+Status: **COMPLETE** — executed against checkpoint `2358a94` (not amended). Four connected parts shipped: structured operating hours, a timezone-correct current-situation engine, a controlled DEMO nearby dataset, and a real retrieval-augmented chatbot that replaced the Under Construction state.
+
+### Files changed
+- **New migrations (2):** `database/migrations/033_p37_operating_hours_and_demo_places.sql`, `database/migrations/034_p37_rag_knowledge.sql` — both applied, migrations now **34/34**.
+- **New backend services (5):** `operatingHours.ts`, `demoPlaces.ts`, `rag/embed.ts`, `rag/knowledge.ts`, `rag/retrieve.ts`, `rag/prompt.ts`, `rag/generate.ts`, `rag/chat.ts`.
+- **Modified backend:** `routes/ai.ts` (RAG path wired into the existing `/chat` endpoint with legacy-compat fields), `routes/admin.ts` (hours CRUD + demo-places CRUD + `rag/status` + `rag/ingest`, all behind `requireAdmin`; also fixed a real bug where the INSERT bound `$3::date`/`$4::date` from the *time* params instead of `$13`/`$14`), `services/visitorIntelligence.ts` (situation integrated), `services/nearby.ts` (OSM → DB → DEMO fallback with origin label), `middleware/rateLimit.ts` (per-user chat bucket).
+- **Modified frontend:** `app/ai/page.tsx` (Under Construction → live chat), `components/ai/ChatBot.tsx` (RAG answer contract, source cards with tier badges, INFORMATION UNAVAILABLE banner), `components/heritage/LiveVisitorIntelligence.tsx` (Current Situation block), `app/admin/page.tsx` (10th tab **Data Ops**), plus removal of 14 stale “Under Construction” labels (home, explore, detail, SearchModal, map panel, map popup, footer).
+- **New tests (2):** `backend/tests/test-operating-hours.js`, `backend/tests/test-demo-data.js`, `backend/tests/test-rag.js`; `db-audit.js` extended to cover the three new tables.
+- **Docs:** `PRD.md`, `report.md`, `docs/ASTROVA-PHASE-37-RAG-VISITOR-INTELLIGENCE.md` (+ `.docx`).
+
+### Architecture
+```
+Operating hours: heritage_entities.timezone → heritage_operating_hours (per day, provenance columns)
+                  → computeSituation (pure, Intl-zoned) → visitorIntelligence.situation → VI panel
+
+Nearby:          OSM/Overpass (live) → Astrova DB → demo_places (DEMO) → INFORMATION UNAVAILABLE
+                  every response carries origin + source label
+
+RAG:             question → language detect → normalise/injection-screen → Xenova/multilingual-e5-small
+                  (384-dim, ONNX) → pgvector cosine → tier/verification re-rank → minScore 0.8
+                  → context → Ollama? OpenAI-compatible? local extractive composer
+                  → answer + [n] citations → conversations + rag_retrievals
+```
+
+### Database
+- `heritage_operating_hours` (28 rows, 4 entities) — CHECK-locked demo honesty: `source_type='DEMO'` rows can never be `schedule_status='VERIFIED'`; two partial unique indexes for default/dated rows.
+- `demo_places` (22 rows, 11 categories, 3 entities) — `CHECK (source_type='DEMO')`, `CHECK (verification_status <> 'VERIFIED')`, `CHECK (NOT (lat=0 AND lon=0))`, unique `(heritage,name,category)`.
+- `rag_chunks` (207 rows, all embedded) — `content_hash UNIQUE`, language CHECK over 6 codes, **`verification_status <> 'REJECTED'` enforced by schema**, pgvector index; `rag_retrievals`, `rag_ingest_runs` for audit.
+- `heritage_entities.timezone` (default `Asia/Kolkata`, non-empty CHECK).
+
+### APIs
+- `POST /api/ai/chat` now returns the RAG contract (`answer`, `sources[]`, `retrieval{count,topK,minScore,model,languageFallback,heritageFiltered}`, `generation{backend,model,status,note}`, `mode`) while keeping every legacy field (`reply`, `intent`, `suggestions`, …) so existing consumers keep working.
+- Admin (all `requireAdmin`): `GET/POST /operating-hours`, `PUT/DELETE /operating-hours/:id`, `GET/POST /demo-places`, `DELETE /demo-places/:id`, `GET /rag/status`, `POST /rag/ingest`.
+- `GET /api/heritage/:id/visitor-intelligence` now embeds `situation{status,label,reason,tz,localTime,today,nextChange,dataOrigin,conflict,scheduleStatus}`.
+
+### Tests (exact counts)
+| Suite | Result |
+|---|---|
+| db-audit | **47/47** |
+| data-quality | 12/12 |
+| enrichment | 4/4 |
+| enrichment-review | 14/14 |
+| visit-module | 16/16 |
+| visitor-intelligence | 10/10 |
+| operating-hours (new) | 34/34 |
+| demo-data (new) | 17/17 |
+| RAG (new) | 32/32 |
+| **Total** | **186 checks green** |
+
+`test-media-upload.js` still fails on the pre-existing missing `form-data` dependency (unchanged from Phase 36).
+
+### Build
+- Backend: `npx tsc --noEmit` exit 0; `npx tsc` build exit 0.
+- Frontend: `npx tsc --noEmit` exit 0; `next build` succeeded, 13/13 pages prerendered.
+
+### Verification highlights
+- **RAG E2E (the acceptance gate):** `POST /api/ai/chat` → `mode: rag` with `sources: [Charminar (OFFICIAL)]` in en; Hindi Charminar question → shared-base fallback answers correctly with `languageFallback: true`; injection question and off-topic question → `mode: no_answer`, zero sources, “INFORMATION UNAVAILABLE”; 401 without API key.
+- **Situation:** 01:02 IST → `CLOSED`, “Opens today at 07:00”, `inMinutes: 386`; CONFLICT entities (Amber Fort, Red Fort) refuse to make an open/closed claim; entities without hours → `INFORMATION UNAVAILABLE`.
+- **Admin CRUD:** create → duplicate rejected 409 → delete; invalid day 400; Null Island 400; re-ingest idempotent (207 seen, 0 inserted).
+- **Responsive:** `/ai` × 10 widths (1440/1280/1024/900/768/740/720/430/390/360), `/heritage/qutub-minar` × 3 (360/768/1440), `/admin` Data Ops × 3 — `scrollWidth === clientWidth` everywhere.
+- **Accessibility:** 0 unlabeled inputs, 0 unnamed buttons, 0 missing alt, 1 h1, `lang=en` on all audited pages.
+- **Performance (5 samples):** search 89 ms · heritage list 170 ms · detail 247 ms · VI cached 249 ms · nearby cached 161 ms · RAG chat p50 **503 ms (en) / 841 ms (hi)** · retrieval alone 82 ms warm · `computeSituation` 0.27 ms p50.
+
+### Known limitations
+- **No LLM runtime in this environment** (`LLM_API_KEY` empty, no Ollama server — both probed): generation is the honest **local extractive composer**, which quotes retrieved sentences with citations. The Ollama/OpenAI adapter is wired; supplying either switches modes with no code change.
+- 4/96 entities have operating hours; the rest correctly report INFORMATION UNAVAILABLE.
+- Non-English chunk coverage is thin (hi 8, gu 7, ta 6, mr 6, pa 5) — cross-lingual fallback covers the gap and quotes in the source language.
+
+Git: committed separately as `feat(astrova): run RAG chatbot and visitor situation` (checkpoint `2358a94` not amended).
+
+---
+
 ## Phase 36 — Trusted Heritage Data Refinement + Provenance + Controlled Enrichment (2026-09-28)
 
 Status: **COMPLETE** — 34 ordered steps executed against checkpoint `67d7cb7`; Feature H advanced to **PARTIAL (advanced)**: a human-gated review workflow is live, unattended public approval remains PLANNED.

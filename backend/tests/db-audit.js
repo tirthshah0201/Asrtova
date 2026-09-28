@@ -180,6 +180,79 @@ async function main() {
     }
   }
 
+  // Phase 37 — operating hours (migration 033)
+  if (tableSet.has("heritage_operating_hours")) {
+    try {
+      const orphan = await pool.query(
+        `SELECT count(*)::int AS n FROM heritage_operating_hours h
+         LEFT JOIN heritage_entities he ON h.heritage_id = he.id WHERE he.id IS NULL`
+      );
+      orphan.rows[0].n === 0
+        ? ok("hours FK integrity", "no orphans")
+        : fail("hours FK integrity", `${orphan.rows[0].n} orphans`);
+
+      const bad = await pool.query(
+        `SELECT count(*)::int AS n FROM heritage_operating_hours
+          WHERE day_of_week NOT BETWEEN 0 AND 6
+             OR (source_type = 'DEMO' AND schedule_status = 'VERIFIED')`
+      );
+      bad.rows[0].n === 0
+        ? ok("hours honesty", "demo rows never VERIFIED, days 0-6")
+        : fail("hours honesty", `${bad.rows[0].n} invalid rows`);
+    } catch (e) {
+      fail("heritage_operating_hours", e.message);
+    }
+  }
+
+  // Phase 37 — demo places (migration 033)
+  if (tableSet.has("demo_places")) {
+    try {
+      const bad = await pool.query(
+        `SELECT count(*)::int AS n FROM demo_places
+          WHERE source_type <> 'DEMO'
+             OR verification_status = 'VERIFIED'
+             OR (latitude = 0 AND longitude = 0)`
+      );
+      bad.rows[0].n === 0
+        ? ok("demo places honesty", "all DEMO, never VERIFIED, no Null Island")
+        : fail("demo places honesty", `${bad.rows[0].n} invalid rows`);
+
+      const orphan = await pool.query(
+        `SELECT count(*)::int AS n FROM demo_places d
+         LEFT JOIN heritage_entities he ON d.heritage_id = he.id WHERE he.id IS NULL`
+      );
+      orphan.rows[0].n === 0
+        ? ok("demo places FK integrity", "no orphans")
+        : fail("demo places FK integrity", `${orphan.rows[0].n} orphans`);
+    } catch (e) {
+      fail("demo_places", e.message);
+    }
+  }
+
+  // Phase 37 — RAG knowledge (migration 034)
+  if (tableSet.has("rag_chunks")) {
+    try {
+      const dupes = await pool.query(
+        `SELECT (count(*) - count(DISTINCT content_hash))::int AS n FROM rag_chunks`
+      );
+      dupes.rows[0].n === 0
+        ? ok("rag content hashes", "unique")
+        : fail("rag content hashes", `${dupes.rows[0].n} duplicates`);
+
+      const bad = await pool.query(
+        `SELECT count(*)::int AS n FROM rag_chunks
+          WHERE verification_status = 'REJECTED'
+             OR language NOT IN ('en','hi','gu','mr','ta','pa')
+             OR embedding IS NULL`
+      );
+      bad.rows[0].n === 0
+        ? ok("rag chunks shape", "no REJECTED rows, valid language, all embedded")
+        : fail("rag chunks shape", `${bad.rows[0].n} invalid rows`);
+    } catch (e) {
+      fail("rag_chunks", e.message);
+    }
+  }
+
   printAndExit(results, pool);
 }
 

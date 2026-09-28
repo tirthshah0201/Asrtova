@@ -325,7 +325,7 @@ export function SearchModal() {
                           className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-red-600 hover:bg-red-50 transition-colors"
                         >
                           <Search className="h-4 w-4 text-red-500" />
-                          Ask Astrova • Under Construction
+                          Ask Astrova
                         </Link>
                       </div>
                     </div>
@@ -631,7 +631,7 @@ export function SearchModalProvider({ children }: { children: React.ReactNode })
                         </Link>
                         <Link href="/ai" onClick={() => setOpen(false)} className="flex items-center gap-3 px-3 py-2 rounded-lg text-sm text-red-600 hover:bg-red-50 transition-colors">
                           <Search className="h-4 w-4 text-red-500" />
-                          Ask Astrova • Under Construction
+                          Ask Astrova
                         </Link>
                       </div>
                     </div>

@@ -46,7 +46,24 @@ interface ChatMessage {
   actions?: ChatAction[];
   choices?: SuggestionItem[];
   heritageCards?: HeritageCard[];
+  sources?: ChatSource[];
+  mode?: string;
+  unavailableReason?: string | null;
   timestamp: Date;
+}
+
+/** Phase 37 Part N — cited source metadata returned by the RAG path. */
+interface ChatSource {
+  n: number;
+  title: string;
+  sourceLabel: string;
+  authorityTier: number | null;
+  tierLabel: string;
+  verificationStatus: string;
+  url: string | null;
+  license: string | null;
+  language: string;
+  score: number;
 }
 
 interface SuggestionItem {
@@ -72,6 +89,13 @@ interface ChatResponseData {
     actions: ChatAction[];
     choices: SuggestionItem[];
     heritage_results: HeritageCard[];
+    /* Phase 37 RAG contract (present on rag/no_answer modes) */
+    answer?: string;
+    sources?: ChatSource[];
+    mode?: string;
+    status?: string;
+    unavailable_reason?: string | null;
+    retrieval?: { count: number; languageFallback?: boolean; heritageFiltered?: boolean };
   };
 }
 
@@ -211,11 +235,14 @@ export function ChatBot({ initialQuestion }: { initialQuestion?: string }) {
       const assistantMsg: ChatMessage = {
         id: `assistant-${++idCounter.current}`,
         role: "assistant",
-        content: res.data.reply,
+        content: res.data.answer || res.data.reply,
         intent: res.data.intent,
         actions: res.data.actions || [],
         choices: res.data.choices || [],
         heritageCards: res.data.heritage_results || [],
+        sources: res.data.sources || [],
+        mode: res.data.mode,
+        unavailableReason: res.data.unavailable_reason ?? null,
         timestamp: new Date(),
       };
 
@@ -394,6 +421,67 @@ export function ChatBot({ initialQuestion }: { initialQuestion?: string }) {
                 <div className={msg.role === "user" ? "text-white" : "text-charcoal"}>
                   {formatContent(msg.content)}
                 </div>
+                {/* Phase 37 Part N — cited sources with authority badges */}
+                {msg.role === "assistant" && msg.sources && msg.sources.length > 0 && (
+                  <div className="mt-3 pt-2 border-t border-border/50">
+                    <p className="text-[10px] font-medium text-muted mb-1.5">Sources</p>
+                    <div className="space-y-1.5">
+                      {msg.sources.map((src) => {
+                        const tierTone =
+                          src.authorityTier === 1
+                            ? "bg-emerald-50 text-emerald-700 border-emerald-200"
+                            : src.authorityTier === 2
+                            ? "bg-heritage-gold/10 text-heritage-gold border-heritage-gold/30"
+                            : "bg-stone-100 text-stone border-stone-200";
+                        const inner = (
+                          <>
+                            <span className="text-[10px] font-semibold text-muted mr-1.5">
+                              [{src.n}]
+                            </span>
+                            <span className="text-xs font-medium text-charcoal truncate">
+                              {src.title}
+                            </span>
+                            <span
+                              className={`ml-auto shrink-0 rounded border px-1.5 py-0.5 text-[9px] font-semibold ${tierTone}`}
+                            >
+                              {src.tierLabel}
+                            </span>
+                            <span className="shrink-0 text-[9px] text-muted">
+                              {src.sourceLabel}
+                            </span>
+                          </>
+                        );
+                        return src.url ? (
+                          <a
+                            key={src.n}
+                            href={src.url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex items-center gap-1.5 rounded-lg border border-border/60 bg-ivory px-2.5 py-1.5 hover:border-terracotta/30 hover:bg-terracotta/5 transition-colors"
+                          >
+                            {inner}
+                          </a>
+                        ) : (
+                          <div
+                            key={src.n}
+                            className="flex items-center gap-1.5 rounded-lg border border-border/60 bg-ivory px-2.5 py-1.5"
+                          >
+                            {inner}
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+                {/* Phase 37 — honest unavailable state, never a guess */}
+                {msg.role === "assistant" && msg.mode === "no_answer" && (
+                  <div className="mt-2 flex items-center gap-1.5 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5">
+                    <span className="h-1.5 w-1.5 rounded-full bg-amber-500 shrink-0" />
+                    <span className="text-[10px] font-medium text-amber-800">
+                      INFORMATION UNAVAILABLE — no sourced answer in the knowledge base.
+                    </span>
+                  </div>
+                )}
                 {/* Heritage entity cards */}
                 {msg.heritageCards && msg.heritageCards.length > 0 && msg.role === "assistant" && (
                   <div className="mt-3 space-y-2">
@@ -527,6 +615,7 @@ export function ChatBot({ initialQuestion }: { initialQuestion?: string }) {
             ref={inputRef}
             type="text"
             value={input}
+            aria-label="Ask Astrova a question"
             onChange={(e) => setInput(e.target.value)}
             placeholder={
               currentLang.code === "en"
@@ -549,6 +638,7 @@ export function ChatBot({ initialQuestion }: { initialQuestion?: string }) {
             type="submit"
             size="sm"
             disabled={!input.trim() || isLoading}
+            aria-label="Send message"
             className="bg-terracotta hover:bg-terracotta-light text-white shrink-0"
           >
             <Send className="h-4 w-4" />

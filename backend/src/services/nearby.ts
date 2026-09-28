@@ -15,12 +15,21 @@
    ======================================== */
 
 import { query } from "../database";
+import { getDemoPlaces, type DemoPlaceRow } from "./demoPlaces";
 import { isValidSlug, isUUID } from "../utils/slug";
 
-const OVERPASS_ENDPOINTS = [
+const DEFAULT_OVERPASS_ENDPOINTS = [
   "https://overpass-api.de/api/interpreter",
   "https://overpass.kumi.systems/api/interpreter",
 ];
+/** Test/ops override: OVERPASS_URLS=https://a/interpreter,https://b/interpreter */
+export const OVERPASS_ENDPOINTS: string[] = (() => {
+  const fromEnv = (process.env.OVERPASS_URLS || "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return fromEnv.length > 0 ? fromEnv : DEFAULT_OVERPASS_ENDPOINTS;
+})();
 // Overpass queues queries under load; 10s+ is normal, so allow 15s.
 const REQUEST_TIMEOUT_MS = 15000;
 const CACHE_TTL_MS = 6 * 60 * 60 * 1000; // 6 hours — Overpass is heavy; be a good citizen
@@ -47,6 +56,13 @@ export interface NearbyPlaceItem {
   distanceKm: number;
   lat: number;
   lon: number;
+  /** Collection origin so demo rows can never pass as live OSM data. */
+  dataOrigin?: "OPENSTREETMAP" | "ASTROVA_DEMO";
+  /** Present only for demo rows (traceability back to the OSM node). */
+  sourceUrl?: string;
+  address?: string;
+  phone?: string;
+  verificationStatus?: "UNVERIFIED" | "REVIEWED";
 }
 
 export interface NearbyStayItem {
@@ -60,6 +76,9 @@ export interface NearbyStayItem {
   stars?: number;
   /** OSM addr:* metadata when present — never fabricated. */
   address?: string;
+  dataOrigin?: "OPENSTREETMAP" | "ASTROVA_DEMO";
+  sourceUrl?: string;
+  verificationStatus?: "UNVERIFIED" | "REVIEWED";
 }
 
 export interface NearbyResponse {
@@ -71,7 +90,11 @@ export interface NearbyResponse {
     generatedAt: string;
     radiusM: number;
     heritageFrom: "astrova_locations";
-    placesProvider: "openstreetmap_overpass";
+    /** Where places/stays came from — never silently mixed. */
+    placesProvider: "openstreetmap_overpass" | "astrova_demo_dataset" | "none";
+    staysProvider: "openstreetmap_overpass" | "astrova_demo_dataset" | "none";
+    /** Part F origin label: OPENSTREETMAP > ASTROVA_DEMO > UNAVAILABLE. */
+    dataOrigin: "OPENSTREETMAP" | "ASTROVA_DEMO" | "UNAVAILABLE";
     /** True when places/stays come from the local 6-hour cache. */
     cached: boolean;
     /** True only when the provider failed and a previous reading is shown. */
@@ -336,6 +359,8 @@ export async function getNearby(
       radiusM: SEARCH_RADIUS_M,
       heritageFrom: "astrova_locations",
       placesProvider: "openstreetmap_overpass",
+      staysProvider: "openstreetmap_overpass",
+      dataOrigin: "OPENSTREETMAP",
       cached: false,
       stale: false,
       errors: [],
@@ -358,6 +383,30 @@ export async function getNearby(
   try {
     const elements = await fetchOverpass(latitude, longitude);
     const { places, stays } = normalizeOverpassElements(elements, latitude, longitude);
+
+    if (places.length === 0 && stays.length === 0) {
+      // Part F: OSM (preferred) found nothing -> controlled DEMO dataset.
+      const demo = await demoFallback(heritageId, latitude, longitude, base);
+      if (demo) return demo;
+      return {
+        ...base,
+        places: [],
+        stays: [],
+        meta: {
+          ...base.meta,
+          placesProvider: "none",
+          staysProvider: "none",
+          dataOrigin: "UNAVAILABLE",
+          errors: [
+            "OpenStreetMap returned no nearby results and no Astrova demo records exist for this site. INFORMATION UNAVAILABLE.",
+          ],
+        },
+      };
+    }
+
+    for (const p of places) p.dataOrigin = "OPENSTREETMAP";
+    for (const s of stays) s.dataOrigin = "OPENSTREETMAP";
+
     const response: NearbyResponse = { ...base, places, stays };
     cache.delete(cacheKey);
     cache.set(cacheKey, { response, expiresAt: now + CACHE_TTL_MS });
@@ -368,23 +417,148 @@ export async function getNearby(
   } catch {
     // Provider failure: keep heritage (own data) but report places/stays as unavailable.
     const stale = cached?.response;
+    if (stale) {
+      return {
+        ...base,
+        places: stale.places,
+        stays: stale.stays,
+        sources: stale.sources,
+        meta: {
+          ...base.meta,
+          ...stale.meta,
+          generatedAt: new Date().toISOString(),
+          cached: false,
+          stale: true,
+          errors: [
+            "Nearby places data may be delayed — showing the last successful reading.",
+          ],
+        },
+      };
+    }
+    const demo = await demoFallback(heritageId, latitude, longitude, base);
+    if (demo) return demo;
     return {
       ...base,
-      places: stale?.places || [],
-      stays: stale?.stays || [],
-      sources: stale?.sources || base.sources,
+      places: [],
+      stays: [],
       meta: {
         ...base.meta,
-        stale: Boolean(stale),
-        cached: false,
-        errors: [
-          stale
-            ? "Nearby places data may be delayed — showing the last successful reading."
-            : "Nearby places are temporarily unavailable. Nearby heritage remains available.",
-        ],
+        placesProvider: "none",
+        staysProvider: "none",
+        dataOrigin: "UNAVAILABLE",
+        errors: ["Nearby places are temporarily unavailable. Nearby heritage remains available."],
       },
     };
   }
+}
+
+/* ---- Controlled DEMO fallback (Part F) ---- */
+
+/** Demo category -> the place vocabulary Astrova's UI already uses. */
+const DEMO_MAP: Record<
+  DemoPlaceRow["category"],
+  { category: NearbyPlaceItem["category"]; kind: string; stays?: boolean }
+> = {
+  HOTEL: { category: "facility", kind: "hotel", stays: true },
+  RESTAURANT: { category: "food", kind: "restaurant" },
+  CAFE: { category: "food", kind: "cafe" },
+  PARKING: { category: "parking", kind: "parking" },
+  MUSEUM: { category: "culture", kind: "museum" },
+  ATTRACTION: { category: "attraction", kind: "attraction" },
+  TRANSPORT: { category: "transport", kind: "bus_stop" },
+  ATM: { category: "facility", kind: "atm" },
+  PHARMACY: { category: "facility", kind: "pharmacy" },
+  HOSPITAL: { category: "facility", kind: "hospital" },
+  SHOPPING: { category: "facility", kind: "supermarket" },
+};
+
+interface DemoBundle {
+  places: NearbyPlaceItem[];
+  stays: NearbyStayItem[];
+}
+
+async function loadDemoBundle(
+  heritageId: string,
+  latitude: number,
+  longitude: number
+): Promise<DemoBundle> {
+  const rows = await getDemoPlaces(heritageId);
+  const places: NearbyPlaceItem[] = [];
+  const stays: NearbyStayItem[] = [];
+
+  for (const row of rows) {
+    const lat = Number(row.latitude);
+    const lon = Number(row.longitude);
+    if (!Number.isFinite(lat) || !Number.isFinite(lon)) continue;
+    if (Math.abs(lat) > 90 || Math.abs(lon) > 180 || (lat === 0 && lon === 0)) continue;
+
+    const map = DEMO_MAP[row.category];
+    if (!map) continue;
+    const distanceKm = Number(haversineKm(latitude, longitude, lat, lon).toFixed(2));
+    const shared = {
+      name: row.name,
+      distanceKm,
+      lat,
+      lon,
+      dataOrigin: "ASTROVA_DEMO" as const,
+      sourceUrl: row.source_url || undefined,
+      verificationStatus: row.verification_status,
+      ...(row.address ? { address: row.address } : {}),
+      ...(row.phone ? { phone: row.phone } : {}),
+    };
+
+    if (map.stays) {
+      stays.push({ ...shared, kind: map.kind, ...(row.website ? { website: row.website } : {}) });
+    } else {
+      places.push({ ...shared, category: map.category, kind: map.kind });
+    }
+  }
+
+  places.sort((a, b) => a.distanceKm - b.distanceKm);
+  stays.sort((a, b) => a.distanceKm - b.distanceKm);
+  return { places: places.slice(0, MAX_PLACES), stays: stays.slice(0, MAX_STAYS) };
+}
+
+/** Build the demo response, or return null when there are no demo rows. */
+async function demoFallback(
+  heritageId: string,
+  latitude: number,
+  longitude: number,
+  base: Omit<NearbyResponse, "places" | "stays">
+): Promise<NearbyResponse | null> {
+  let bundle: DemoBundle;
+  try {
+    bundle = await loadDemoBundle(heritageId, latitude, longitude);
+  } catch {
+    return null;
+  }
+  if (bundle.places.length === 0 && bundle.stays.length === 0) return null;
+
+  const sources = base.sources
+    .filter((s) => !s.type.includes("nearby places and stays"))
+    .concat({
+      name: "Astrova demo dataset",
+      type: "nearby places and stays (DEMO — not verified)",
+      url: "/about",
+    });
+
+  return {
+    ...base,
+    places: bundle.places,
+    stays: bundle.stays,
+    sources,
+    meta: {
+      ...base.meta,
+      placesProvider: "astrova_demo_dataset",
+      staysProvider: "astrova_demo_dataset",
+      dataOrigin: "ASTROVA_DEMO",
+      cached: false,
+      stale: false,
+      errors: [
+        "OpenStreetMap returned no nearby results — showing the Astrova demo dataset (DEMO, not verified).",
+      ],
+    },
+  };
 }
 
 

@@ -284,7 +284,7 @@ export default function HomePage() {
                   className="font-semibold"
                 >
                   <Sparkles className="h-4 w-4" />
-                  Ask Astrova • Under Construction
+                  Ask Astrova
                 </Button>
               </Link>
             </motion.div>
@@ -799,7 +799,7 @@ export default function HomePage() {
                 </div>
                 <h2 className="font-display text-2xl sm:text-3xl text-charcoal">
                   Ask Astrova
-                  <span className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold align-middle" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>Under Construction</span>
+                  <span className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold align-middle" style={{ backgroundColor: '#dcfce7', color: '#15803d' }}>Live</span>
                 </h2>
                 <p className="mt-3 text-stone max-w-md mx-auto">
                   Ask questions about India&apos;s heritage in 6 languages. Get grounded, verified answers about monuments, crafts, traditions, and history.
@@ -826,7 +826,7 @@ export default function HomePage() {
                   <Link href="/ai">
                     <Button size="lg" variant="ghost" style={{ backgroundColor: '#dc2626', color: '#ffffff', boxShadow: '0 4px 14px rgba(220,38,38,0.2)' }} className="font-semibold">
                       <Sparkles className="h-4 w-4" />
-                      Open Astrova Guide • Under Construction
+                      Open Astrova Guide
                       <ArrowUpRight className="h-4 w-4" />
                     </Button>
                   </Link>

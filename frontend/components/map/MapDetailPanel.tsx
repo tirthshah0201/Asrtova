@@ -193,7 +193,7 @@ export function MapDetailPanel({
                          style={{ backgroundColor: '#dc2626' }}
             >
               <Sparkles className="h-4 w-4" />
-              Ask Astrova • Under Construction
+              Ask Astrova
             </button>
 
             {/* Entity detail link */}
@@ -222,7 +222,7 @@ export function MapDetailPanel({
                          style={{ border: '1px solid #fecaca', color: '#dc2626' }}
             >
               <Sparkles className="h-4 w-4" />
-              Ask in chat • Under Construction
+              Ask in chat
             </a>
           </div>
 

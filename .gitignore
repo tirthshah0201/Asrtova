@@ -75,3 +75,6 @@ exports/*.xlsx
 # Upload directory (runtime files)
 backend/uploads/
 
+# Phase 37 — downloaded embedding model weights (rebuilt by ingestion, never committed)
+backend/.model-cache/
+

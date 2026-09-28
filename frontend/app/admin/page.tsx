@@ -120,7 +120,61 @@ interface PeriodItem {
   heritage_count: number;
 }
 
-type AdminTab = "overview" | "heritage" | "media" | "locations" | "sources" | "users" | "collections" | "periods" | "review";
+type AdminTab = "overview" | "heritage" | "media" | "locations" | "sources" | "users" | "collections" | "periods" | "review" | "dataops";
+
+/* ---- Phase 37 Part U: data-ops types ---- */
+
+interface OperatingHoursRow {
+  id: string;
+  heritage_id: string;
+  heritage_name: string;
+  day_of_week: number;
+  open_time: string | null;
+  close_time: string | null;
+  is_closed: boolean;
+  is_24_hours: boolean;
+  special_note: string | null;
+  source_url: string | null;
+  source_type: string;
+  schedule_status: string;
+  verification_status: string;
+}
+
+interface DemoPlaceRow {
+  id: string;
+  heritage_id: string;
+  heritage_name: string;
+  name: string;
+  category: string;
+  latitude: number;
+  longitude: number;
+  address: string | null;
+  source_type: string;
+  verification_status: string;
+}
+
+interface RagStatusData {
+  pgvector: boolean;
+  embedding: { model: string; dimensions: number; dtype: string };
+  chunks: {
+    total: number;
+    embedded: number;
+    verified: number;
+    languages: Record<string, number>;
+    tiers: Record<string, number>;
+  };
+  lastRun: {
+    model: string;
+    chunks_seen: number;
+    chunks_inserted: number;
+    status: string;
+    started_at: string;
+    finished_at: string | null;
+    error: string | null;
+  } | null;
+  generation: { backend: string; model: string | null; reason: string };
+  note: string;
+}
 
 /* ========================================
    Auth Gate
@@ -2180,6 +2234,414 @@ function PeriodsTab({ showToast }: { showToast: (msg: string, type: "success" | 
 }
 
 /* ========================================
+   Phase 37 Part U — Data Ops (hours, demo places, RAG)
+   ======================================== */
+
+const DAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const SCHEDULE_STATUS_STYLES: Record<string, string> = {
+  VERIFIED: "bg-emerald-50 text-emerald-700",
+  DEMO: "bg-sky-50 text-sky-700",
+  CONFLICT: "bg-amber-50 text-amber-700",
+  ASTROVA_ESTIMATE: "bg-stone-100 text-stone-600",
+};
+
+function DataOpsTab({ showToast }: { showToast: (msg: string, type: "success" | "error") => void }) {
+  const [rag, setRag] = useState<RagStatusData | null>(null);
+  const [ingesting, setIngesting] = useState(false);
+  const [hours, setHours] = useState<OperatingHoursRow[]>([]);
+  const [places, setPlaces] = useState<DemoPlaceRow[]>([]);
+  const [entities, setEntities] = useState<{ id: string; name: string }[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [placeStats, setPlaceStats] = useState<{ total: number; categories: number; entities: number; verified: number } | null>(null);
+
+  // Hours form
+  const [hEntity, setHEntity] = useState("");
+  const [hDay, setHDay] = useState("1");
+  const [hOpen, setHOpen] = useState("09:00");
+  const [hClose, setHClose] = useState("17:00");
+  const [hClosed, setHClosed] = useState(false);
+  const [h24, setH24] = useState(false);
+  const [hNote, setHNote] = useState("");
+  const [hUrl, setHUrl] = useState("");
+  const [savingHours, setSavingHours] = useState(false);
+
+  // Demo place form
+  const [pEntity, setPEntity] = useState("");
+  const [pName, setPName] = useState("");
+  const [pCategory, setPCategory] = useState("HOTEL");
+  const [pLat, setPLat] = useState("");
+  const [pLon, setPLon] = useState("");
+  const [savingPlace, setSavingPlace] = useState(false);
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    try {
+      const [ragRes, hoursRes, placesRes, heritageRes] = await Promise.all([
+        api.requestWithHeaders<{ success: boolean; data: RagStatusData }>("/admin/rag/status", "GET", {}),
+        api.requestWithHeaders<{ success: boolean; data?: { rows: OperatingHoursRow[] } }>("/admin/operating-hours", "GET", {}),
+        api.requestWithHeaders<{ success: boolean; data?: { rows: DemoPlaceRow[]; stats: { total: number; categories: number; entities: number; verified: number } } }>("/admin/demo-places", "GET", {}),
+        api.requestWithHeaders<{ success: boolean; data?: { id: string; name: string }[] }>("/admin/heritage", "GET", {}),
+      ]);
+      if (ragRes.success) setRag(ragRes.data);
+      if (hoursRes.success && hoursRes.data) setHours(hoursRes.data.rows);
+      if (placesRes.success && placesRes.data) {
+        setPlaces(placesRes.data.rows);
+        setPlaceStats(placesRes.data.stats);
+      }
+      if (heritageRes.success && heritageRes.data) setEntities(heritageRes.data);
+    } catch {
+      showToast("Could not load data-ops records", "error");
+    } finally {
+      setLoading(false);
+    }
+  }, [showToast]);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch after await
+  useEffect(() => { fetchAll(); }, [fetchAll]);
+
+  const handleIngest = async () => {
+    setIngesting(true);
+    try {
+      const res = await api.requestWithHeaders<{
+        success: boolean;
+        data?: { status: string; chunks_seen: number; chunks_inserted: number };
+        error?: { message?: string };
+      }>("/admin/rag/ingest", "POST", {});
+      if (res.success && res.data) {
+        showToast(`Ingestion ${res.data.status.toLowerCase()} — ${res.data.chunks_inserted} new of ${res.data.chunks_seen} seen`, "success");
+        fetchAll();
+      } else {
+        showToast(res.error?.message || "Ingestion failed", "error");
+      }
+    } catch { showToast("Ingestion request failed", "error"); } finally { setIngesting(false); }
+  };
+
+  const handleAddHours = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!hEntity) { showToast("Pick a heritage entity", "error"); return; }
+    setSavingHours(true);
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message?: string } }>(
+        "/admin/operating-hours", "POST", {},
+        {
+          heritageId: hEntity, dayOfWeek: Number(hDay),
+          openTime: hClosed || h24 ? null : hOpen,
+          closeTime: hClosed || h24 ? null : hClose,
+          isClosed: hClosed, is24Hours: h24,
+          specialNote: hNote || null, sourceUrl: hUrl || null,
+          // Honesty: anything an admin types here is DEMO until reviewed.
+          sourceType: "DEMO", scheduleStatus: "DEMO", verificationStatus: "UNVERIFIED",
+        }
+      );
+      if (res.success) {
+        showToast("Schedule row added as DEMO — not verified", "success");
+        setHNote(""); setHUrl("");
+        fetchAll();
+      } else showToast(res.error?.message || "Could not add schedule", "error");
+    } catch { showToast("Request failed", "error"); } finally { setSavingHours(false); }
+  };
+
+  const handleDeleteHours = async (id: string) => {
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message?: string } }>(
+        `/admin/operating-hours/${id}`, "DELETE", {}
+      );
+      if (res.success) { showToast("Schedule row deleted", "success"); fetchAll(); }
+      else showToast(res.error?.message || "Delete failed", "error");
+    } catch { showToast("Request failed", "error"); }
+  };
+
+  const handleAddPlace = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!pEntity || !pName.trim()) { showToast("Entity and name are required", "error"); return; }
+    setSavingPlace(true);
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message?: string } }>(
+        "/admin/demo-places", "POST", {},
+        { heritageId: pEntity, name: pName.trim(), category: pCategory, latitude: Number(pLat), longitude: Number(pLon) }
+      );
+      if (res.success) {
+        showToast("Demo place added (DEMO / UNVERIFIED)", "success");
+        setPName(""); setPLat(""); setPLon("");
+        fetchAll();
+      } else showToast(res.error?.message || "Could not add place", "error");
+    } catch { showToast("Request failed", "error"); } finally { setSavingPlace(false); }
+  };
+
+  const handleDeletePlace = async (id: string) => {
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message?: string } }>(
+        `/admin/demo-places/${id}`, "DELETE", {}
+      );
+      if (res.success) { showToast("Demo place deleted", "success"); fetchAll(); }
+      else showToast(res.error?.message || "Delete failed", "error");
+    } catch { showToast("Request failed", "error"); }
+  };
+
+  if (loading) return <LoadingState />;
+
+  return (
+    <div className="space-y-6">
+      {/* ---- RAG status ---- */}
+      <section className="rounded-xl border border-border bg-white overflow-hidden">
+        <header className="flex flex-wrap items-center justify-between gap-3 px-5 py-4 border-b border-border bg-parchment">
+          <div>
+            <h3 className="font-display text-lg text-charcoal flex items-center gap-2">
+              <Database className="h-4 w-4 text-terracotta" /> RAG knowledge base
+            </h3>
+            <p className="text-xs text-muted mt-0.5">Vector retrieval status and idempotent re-ingestion.</p>
+          </div>
+          <button
+            onClick={handleIngest}
+            disabled={ingesting}
+            className="inline-flex items-center gap-2 rounded-lg bg-terracotta px-3 py-2 text-sm font-medium text-white hover:bg-terracotta-light disabled:opacity-60"
+          >
+            {ingesting ? <RefreshCw className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
+            {ingesting ? "Rebuilding…" : "Rebuild knowledge"}
+          </button>
+        </header>
+        {rag ? (
+          <div className="p-5 grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-[10px] uppercase tracking-wider text-muted">pgvector</p>
+              <p className={`mt-1 text-sm font-semibold ${rag.pgvector ? "text-emerald-600" : "text-red-600"}`}>
+                {rag.pgvector ? "Available" : "Missing"}
+              </p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-[10px] uppercase tracking-wider text-muted">Embedding model</p>
+              <p className="mt-1 text-sm font-medium text-charcoal break-all">{rag.embedding.model}</p>
+              <p className="text-xs text-muted">{rag.embedding.dimensions}-dim · {rag.embedding.dtype}</p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-[10px] uppercase tracking-wider text-muted">Chunks</p>
+              <p className="mt-1 text-sm font-medium text-charcoal">
+                {rag.chunks.embedded} / {rag.chunks.total} embedded
+              </p>
+              <p className="text-xs text-muted">{rag.chunks.verified} verified · {Object.keys(rag.chunks.languages).length} languages</p>
+            </div>
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-[10px] uppercase tracking-wider text-muted">Generation backend</p>
+              <p className="mt-1 text-sm font-medium text-charcoal capitalize">{rag.generation.backend}</p>
+              <p className="text-xs text-muted line-clamp-2">{rag.generation.reason}</p>
+            </div>
+            <div className="sm:col-span-2 lg:col-span-4 flex flex-wrap gap-2">
+              {Object.entries(rag.chunks.languages).map(([lang, n]) => (
+                <span key={lang} className="rounded-full border border-border px-2.5 py-1 text-xs text-charcoal">
+                  {lang.toUpperCase()} · {n}
+                </span>
+              ))}
+            </div>
+            {rag.lastRun && (
+              <p className="sm:col-span-2 lg:col-span-4 text-xs text-muted">
+                Last run: {rag.lastRun.status} · {rag.lastRun.chunks_inserted} inserted of {rag.lastRun.chunks_seen} seen
+                {rag.lastRun.error ? ` · error: ${rag.lastRun.error}` : ""}
+              </p>
+            )}
+          </div>
+        ) : (
+          <div className="p-5 text-sm text-muted">RAG status unavailable.</div>
+        )}
+      </section>
+
+      {/* ---- Operating hours ---- */}
+      <section className="rounded-xl border border-border bg-white overflow-hidden">
+        <header className="px-5 py-4 border-b border-border bg-parchment">
+          <h3 className="font-display text-lg text-charcoal flex items-center gap-2">
+            <Clock className="h-4 w-4 text-terracotta" /> Operating hours
+            <Badge variant="secondary" className="bg-white text-stone border-cream">{hours.length} rows</Badge>
+          </h3>
+          <p className="text-xs text-muted mt-0.5">
+            New rows are stored as DEMO / UNVERIFIED. CONFLICT rows refuse to make an open/closed claim.
+          </p>
+        </header>
+
+        <form onSubmit={handleAddHours} className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-6 items-end border-b border-border bg-ivory">
+          <label className="block lg:col-span-2">
+            <span className="block text-xs font-medium text-muted mb-1">Heritage entity</span>
+            <select
+              value={hEntity}
+              onChange={(e) => setHEntity(e.target.value)}
+              className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal"
+              required
+            >
+              <option value="">Select…</option>
+              {entities.map((ent) => <option key={ent.id} value={ent.id}>{ent.name}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="block text-xs font-medium text-muted mb-1">Day</span>
+            <select value={hDay} onChange={(e) => setHDay(e.target.value)} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal">
+              {DAY_LABELS.map((d, i) => <option key={d} value={i}>{d}</option>)}
+            </select>
+          </label>
+          <label className="block">
+            <span className="block text-xs font-medium text-muted mb-1">Opens</span>
+            <input type="time" value={hOpen} onChange={(e) => setHOpen(e.target.value)} disabled={hClosed || h24} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal disabled:opacity-50" />
+          </label>
+          <label className="block">
+            <span className="block text-xs font-medium text-muted mb-1">Closes</span>
+            <input type="time" value={hClose} onChange={(e) => setHClose(e.target.value)} disabled={hClosed || h24} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal disabled:opacity-50" />
+          </label>
+          <div className="flex items-center gap-3 pb-1">
+            <label className="flex items-center gap-1.5 text-xs text-charcoal">
+              <input type="checkbox" checked={hClosed} onChange={(e) => { setHClosed(e.target.checked); if (e.target.checked) setH24(false); }} /> Closed
+            </label>
+            <label className="flex items-center gap-1.5 text-xs text-charcoal">
+              <input type="checkbox" checked={h24} onChange={(e) => { setH24(e.target.checked); if (e.target.checked) setHClosed(false); }} /> 24 h
+            </label>
+          </div>
+          <label className="block lg:col-span-3">
+            <span className="block text-xs font-medium text-muted mb-1">Special note</span>
+            <input type="text" value={hNote} onChange={(e) => setHNote(e.target.value)} placeholder="e.g. Demo hours — not verified" className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal" />
+          </label>
+          <label className="block lg:col-span-2">
+            <span className="block text-xs font-medium text-muted mb-1">Source URL (http/https)</span>
+            <input type="url" value={hUrl} onChange={(e) => setHUrl(e.target.value)} placeholder="https://…" className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal" />
+          </label>
+          <button type="submit" disabled={savingHours} className="rounded-lg bg-charcoal px-3 py-2 text-sm font-medium text-white hover:bg-charcoal/90 disabled:opacity-60">
+            {savingHours ? "Saving…" : "Add row"}
+          </button>
+        </form>
+
+        <div className="max-h-80 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-parchment text-[11px] uppercase tracking-wider text-muted">
+              <tr>
+                <th className="text-left px-5 py-2">Heritage</th>
+                <th className="text-left px-3 py-2">Day</th>
+                <th className="text-left px-3 py-2">Hours</th>
+                <th className="text-left px-3 py-2">Status</th>
+                <th className="text-left px-3 py-2">Source</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {hours.map((h) => (
+                <tr key={h.id} className="hover:bg-ivory">
+                  <td className="px-5 py-2 text-charcoal">{h.heritage_name}</td>
+                  <td className="px-3 py-2 text-muted">{DAY_LABELS[h.day_of_week]}</td>
+                  <td className="px-3 py-2 text-charcoal">
+                    {h.is_closed ? "Closed" : h.is_24_hours ? "24 hours" : `${(h.open_time || "").slice(0, 5)} – ${(h.close_time || "").slice(0, 5)}`}
+                  </td>
+                  <td className="px-3 py-2">
+                    <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold ${SCHEDULE_STATUS_STYLES[h.schedule_status] || "bg-stone-100 text-stone-600"}`}>
+                      {h.schedule_status}
+                    </span>
+                  </td>
+                  <td className="px-3 py-2 text-xs text-muted max-w-[180px] truncate">
+                    {h.source_url ? (
+                      <a href={h.source_url} target="_blank" rel="noopener noreferrer" className="text-terracotta hover:underline inline-flex items-center gap-1">
+                        {h.source_type} <ExternalLink className="h-3 w-3" />
+                      </a>
+                    ) : h.source_type}
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <button
+                      onClick={() => handleDeleteHours(h.id)}
+                      aria-label={`Delete ${h.heritage_name} ${DAY_LABELS[h.day_of_week]} schedule`}
+                      className="text-muted hover:text-red-600"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {hours.length === 0 && (
+                <tr><td colSpan={6} className="px-5 py-6 text-sm text-muted">No operating-hours rows yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+
+      {/* ---- Demo places ---- */}
+      <section className="rounded-xl border border-border bg-white overflow-hidden">
+        <header className="px-5 py-4 border-b border-border bg-parchment">
+          <h3 className="font-display text-lg text-charcoal flex items-center gap-2">
+            <MapPin className="h-4 w-4 text-terracotta" /> Demo nearby places
+            <Badge variant="secondary" className="bg-white text-stone border-cream">
+              {placeStats ? `${placeStats.total} rows · ${placeStats.categories} categories` : `${places.length} rows`}
+            </Badge>
+          </h3>
+          <p className="text-xs text-muted mt-0.5">
+            Fallback dataset used only when OpenStreetMap returns nothing. No prices, ratings or availability are stored.
+            {placeStats && placeStats.verified > 0 && (
+              <span className="text-red-600"> Unexpected verified rows: {placeStats.verified}</span>
+            )}
+          </p>
+        </header>
+
+        <form onSubmit={handleAddPlace} className="grid gap-3 p-5 sm:grid-cols-2 lg:grid-cols-6 items-end border-b border-border bg-ivory">
+          <label className="block lg:col-span-2">
+            <span className="block text-xs font-medium text-muted mb-1">Heritage entity</span>
+            <select value={pEntity} onChange={(e) => setPEntity(e.target.value)} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal" required>
+              <option value="">Select…</option>
+              {entities.map((ent) => <option key={ent.id} value={ent.id}>{ent.name}</option>)}
+            </select>
+          </label>
+          <label className="block lg:col-span-2">
+            <span className="block text-xs font-medium text-muted mb-1">Name</span>
+            <input type="text" value={pName} onChange={(e) => setPName(e.target.value)} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal" required />
+          </label>
+          <label className="block">
+            <span className="block text-xs font-medium text-muted mb-1">Category</span>
+            <select value={pCategory} onChange={(e) => setPCategory(e.target.value)} className="w-full rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal">
+              {["HOTEL","RESTAURANT","CAFE","PARKING","MUSEUM","ATTRACTION","TRANSPORT","ATM","PHARMACY","HOSPITAL","SHOPPING"].map((c) => (
+                <option key={c} value={c}>{c}</option>
+              ))}
+            </select>
+          </label>
+          <button type="submit" disabled={savingPlace} className="rounded-lg bg-charcoal px-3 py-2 text-sm font-medium text-white hover:bg-charcoal/90 disabled:opacity-60">
+            {savingPlace ? "Saving…" : "Add place"}
+          </button>
+          <div className="flex gap-2 lg:col-span-6">
+            <input type="number" step="any" value={pLat} onChange={(e) => setPLat(e.target.value)} placeholder="latitude" aria-label="Latitude" className="flex-1 rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal" />
+            <input type="number" step="any" value={pLon} onChange={(e) => setPLon(e.target.value)} placeholder="longitude" aria-label="Longitude" className="flex-1 rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal" />
+          </div>
+        </form>
+
+        <div className="max-h-80 overflow-y-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-parchment text-[11px] uppercase tracking-wider text-muted">
+              <tr>
+                <th className="text-left px-5 py-2">Name</th>
+                <th className="text-left px-3 py-2">Heritage</th>
+                <th className="text-left px-3 py-2">Category</th>
+                <th className="text-left px-3 py-2">Coordinates</th>
+                <th className="text-left px-3 py-2">Label</th>
+                <th className="px-3 py-2" />
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border">
+              {places.map((p) => (
+                <tr key={p.id} className="hover:bg-ivory">
+                  <td className="px-5 py-2 text-charcoal">{p.name}</td>
+                  <td className="px-3 py-2 text-muted">{p.heritage_name}</td>
+                  <td className="px-3 py-2 text-xs text-charcoal">{p.category}</td>
+                  <td className="px-3 py-2 text-xs text-muted">{Number(p.latitude).toFixed(4)}, {Number(p.longitude).toFixed(4)}</td>
+                  <td className="px-3 py-2">
+                    <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[10px] font-semibold text-sky-700">{p.source_type} · {p.verification_status}</span>
+                  </td>
+                  <td className="px-3 py-2 text-right">
+                    <button onClick={() => handleDeletePlace(p.id)} aria-label={`Delete ${p.name}`} className="text-muted hover:text-red-600">
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </td>
+                </tr>
+              ))}
+              {places.length === 0 && (
+                <tr><td colSpan={6} className="px-5 py-6 text-sm text-muted">No demo places yet.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/* ========================================
    Main Admin Page
    ======================================== */
 
@@ -2276,6 +2738,7 @@ export default function AdminPage() {
     { key: "locations", label: "Locations", icon: MapPin },
     { key: "sources", label: "Sources", icon: BookOpen },
     { key: "review", label: "Data Review", icon: ShieldCheck },
+    { key: "dataops", label: "Data Ops", icon: Database },
     { key: "users", label: "Users", icon: Users },
     { key: "collections", label: "Collections", icon: Layers },
     { key: "periods", label: "Periods", icon: Clock },
@@ -2445,6 +2908,7 @@ export default function AdminPage() {
               {activeTab === "locations" && <LocationsTab showToast={showToast} />}
               {activeTab === "sources" && <SourcesTab showToast={showToast} />}
               {activeTab === "review" && <ReviewTab showToast={showToast} />}
+              {activeTab === "dataops" && <DataOpsTab showToast={showToast} />}
               {activeTab === "users" && <UsersTab showToast={showToast} />}
               {activeTab === "collections" && <CollectionsTab showToast={showToast} />}
               {activeTab === "periods" && <PeriodsTab showToast={showToast} />}

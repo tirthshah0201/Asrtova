@@ -147,6 +147,19 @@ export const chatRateLimit = rateLimit({
   message: "Too many chat requests. Please slow down.",
 });
 
+/** Chat: 20 requests per minute per AUTHENTICATED user (IP fallback).
+ *  Phase 37 Part R — per-IP chatRateLimit still applies on the mount. */
+export const userChatRateLimit = rateLimit({
+  maxRequests: 20,
+  windowMs: 60 * 1000,
+  keyFn: (req) => {
+    const user = (req as { user?: { id?: string } }).user;
+    if (user?.id) return `chat-user:${user.id}`;
+    return `chat-ip:${req.ip || req.socket.remoteAddress || "unknown"}`;
+  },
+  message: "Too many chat requests for this account. Please slow down.",
+});
+
 /** Favorites mutation: 30 requests per minute per IP */
 export const favoritesRateLimit = rateLimit({
   maxRequests: 30,

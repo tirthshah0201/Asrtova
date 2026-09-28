@@ -6,6 +6,15 @@ import {
   isRecord,
   sourceEntry,
 } from "./providers";
+import {
+  DEFAULT_TIMEZONE,
+  getScheduleForEntity,
+  sourceTypeLabel,
+  type DataOrigin,
+  type DaySchedule,
+  type NextChange,
+  type ScheduleStatus,
+} from "./operatingHours";
 
 const WEATHER_URL = "https://api.open-meteo.com/v1/forecast";
 const AIR_QUALITY_URL = "https://air-quality-api.open-meteo.com/v1/air-quality";
@@ -38,18 +47,30 @@ interface CachedResponse {
 }
 
 export interface SituationData {
-  /** Allowed states. Astrova only leaves "information_unavailable" until a
-   * verified live-status source exists for the site. */
+  /** Phase 37 Part C states — derived from the operating-hours schedule.
+   * INFORMATION_UNAVAILABLE covers both "no schedule" and "conflicting
+   * schedule" (flagged separately) so Astrova never invents an open state. */
   status:
-    | "open"
-    | "closed"
-    | "temporarily_restricted"
-    | "maintenance"
-    | "information_unavailable";
+    | "OPEN"
+    | "CLOSED"
+    | "CLOSING_SOON"
+    | "OPENING_SOON"
+    | "OPEN_24_HOURS"
+    | "CLOSED_TODAY"
+    | "INFORMATION_UNAVAILABLE";
   label: string;
   reason: string;
   source: { name: string; url: string } | null;
   checkedAt: string;
+  /** Timezone used for the calculation (heritage location's zone). */
+  timezone: string;
+  localTime: string;
+  today: DaySchedule | null;
+  nextChange: NextChange | null;
+  dataOrigin: DataOrigin;
+  conflict: boolean;
+  reviewLabel: string | null;
+  scheduleStatus: ScheduleStatus | "NONE";
 }
 
 export interface VisitorIntelligenceResponse {
@@ -74,16 +95,51 @@ export interface VisitorIntelligenceResponse {
   };
 }
 
-/** Feature B: never fabricate open/closed/busy/safe states. */
-function buildSituation(): SituationData {
+/** Feature B / Phase 37: never fabricate open/closed/busy/safe states. */
+function emptySituation(): SituationData {
   return {
-    status: "information_unavailable",
+    status: "INFORMATION_UNAVAILABLE",
     label: "Current status unavailable",
     reason:
-      "Astrova has no verified live source for opening status, closures or crowd levels at this site, so no status is shown.",
+      "Astrova has no operating-hours schedule or verified live source for this site, so no status is shown.",
     source: null,
     checkedAt: new Date().toISOString(),
+    timezone: DEFAULT_TIMEZONE,
+    localTime: "--:--",
+    today: null,
+    nextChange: null,
+    dataOrigin: "NONE",
+    conflict: false,
+    reviewLabel: null,
+    scheduleStatus: "NONE",
   };
+}
+
+/** Phase 37 Part C — current situation from the schedule in the site's timezone. */
+async function buildSituation(entityId: string): Promise<SituationData> {
+  try {
+    const { situation } = await getScheduleForEntity(entityId);
+    return {
+      status: situation.status,
+      label: situation.label,
+      reason: situation.reason,
+      source: situation.source
+        ? { name: sourceTypeLabel(situation.source.type), url: situation.source.url || "" }
+        : null,
+      checkedAt: new Date().toISOString(),
+      timezone: situation.timezone,
+      localTime: situation.localTime,
+      today: situation.today,
+      nextChange: situation.nextChange,
+      dataOrigin: situation.dataOrigin,
+      conflict: situation.conflict,
+      reviewLabel: situation.reviewLabel,
+      scheduleStatus: situation.scheduleStatus,
+    };
+  } catch (err) {
+    console.error("[Visitor Intelligence] schedule lookup failed:", (err as Error).message);
+    return emptySituation();
+  }
 }
 
 interface WeatherData {
@@ -525,7 +581,7 @@ async function loadResponse(row: HeritageRow, staleResponse?: VisitorIntelligenc
         : null,
     },
     availability: "available",
-    situation: buildSituation(),
+    situation: emptySituation(),
     weather,
     airQuality,
     recommendation: weather
@@ -557,6 +613,10 @@ export async function getVisitorIntelligence(identifier: string): Promise<Visito
   const row = rows[0];
   if (!row) return null;
 
+  // Phase 37: the current situation depends on the wall clock, so it is
+  // recomputed on every request — never served from the weather cache.
+  const situation = await buildSituation(row.id);
+
   const base = {
     id: row.id,
     name: row.name,
@@ -567,7 +627,7 @@ export async function getVisitorIntelligence(identifier: string): Promise<Visito
     return {
       heritage: base,
       availability: "location_unavailable",
-      situation: buildSituation(),
+      situation,
       weather: null,
       airQuality: null,
       recommendation: null,
@@ -588,10 +648,12 @@ export async function getVisitorIntelligence(identifier: string): Promise<Visito
     const agedOut = Number.isFinite(fetchedAt) && Date.now() - fetchedAt > CACHE_TTL_MS;
     return {
       ...cached.response,
+      situation,
       meta: { ...cached.response.meta, stale: cached.response.meta.stale || agedOut },
     };
   }
   const response = await loadResponse(row, cached?.response);
+  response.situation = situation;
   cache.delete(cacheKey);
   // Never cache a weather-less result — a transient provider failure would
   // otherwise poison the cache for a full TTL. Stale (previous) weather is OK.

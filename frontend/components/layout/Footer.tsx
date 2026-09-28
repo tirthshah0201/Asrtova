@@ -6,7 +6,8 @@ const footerLinks = {
   explore: [
     { href: "/explore", label: "Explore India" },
     { href: "/timeline", label: "Historical Timeline" },
-    { href: "/heritage", label: "Heritage Directory" },            { href: "/ai", label: "Ask Astrova • Under Construction", highlight: true },
+    { href: "/heritage", label: "Heritage Directory" },
+    { href: "/ai", label: "Ask Astrova", highlight: true },
   ],
   project: [            { href: "/about", label: "About Astrova" },
     { href: "/about", label: "Our Mission" },

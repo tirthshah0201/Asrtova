@@ -2,10 +2,10 @@
 
 import Link from "next/link";
 import { Container } from "@/components/ui/Container";
-import { Card, CardContent } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { useApi } from "@/hooks/useApi";
-import { Sparkles, Globe, Database, MapPin, Wrench } from "lucide-react";
+import { ChatBot } from "@/components/ai/ChatBot";
+import { Sparkles, Globe, Database, MapPin, ShieldCheck } from "lucide-react";
 
 function AIPageContent() {
   const { data: heritage } = useApi<Array<{ id: string }>>("/heritage");
@@ -39,43 +39,27 @@ function AIPageContent() {
           </div>
         </div>
 
-        {/* Under Construction State */}
+        {/* Live RAG chat (Phase 37 — backend verified end-to-end) */}
         <div className="max-w-3xl mx-auto">
-          <Card className="overflow-hidden border-cream shadow-lg shadow-terracotta/5">
-            <CardContent className="p-8 sm:p-12 text-center">
-              <div className="flex h-16 w-16 items-center justify-center rounded-2xl bg-heritage-gold/10 mx-auto mb-6">
-                <Wrench className="h-8 w-8 text-heritage-gold" />
-              </div>
-              <h2 className="font-display text-2xl sm:text-3xl text-charcoal mb-3">
-                Astrova AI is Under Construction
-              </h2>
-              <p className="text-stone text-base sm:text-lg max-w-lg mx-auto mb-6">
-                Our multilingual heritage AI assistant is being crafted with care.{' '}
-                It will soon help you explore India&apos;s cultural treasures across{' '}
-                6 languages.
-              </p>
-              <div className="flex flex-wrap gap-3 justify-center mb-6">
-                <div className="flex items-center gap-2 text-sm text-muted">
-                  <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-                  Multilingual AI
-                </div>
-                <div className="flex items-center gap-2 text-sm text-muted">
-                  <div className="h-2 w-2 rounded-full bg-red-400 animate-pulse" />
-                  Heritage Knowledge
-                </div>
-                <div className="flex items-center gap-2 text-sm text-muted">
-                  <div className="h-2 w-2 rounded-full bg-red-500 animate-pulse" />
-                  6 Languages
-                </div>
-              </div>
-              <p className="text-xs text-warm-gray">
-                In the meantime, explore our{' '}
-                <Link href="/explore" className="text-terracotta hover:underline">heritage collection</Link>,{' '}
-                <Link href="/timeline" className="text-terracotta hover:underline">timeline</Link>, and{' '}
-                <Link href="/collections" className="text-terracotta hover:underline">curated collections</Link>.
-              </p>
-            </CardContent>
-          </Card>
+          <ChatBot />
+          <p className="mt-3 text-center text-xs text-warm-gray">
+            Answers are retrieved from Astrova&apos;s knowledge base with cited sources. 
+            When nothing trustworthy is found, the assistant says so instead of guessing. 
+            See our <Link href="/about" className="text-terracotta hover:underline">data sources</Link>.
+          </p>
+        </div>
+
+        {/* RAG status badges */}
+        <div className="mt-8 flex flex-wrap justify-center gap-2">
+          <Badge variant="secondary" className="bg-terracotta-mist text-stone border-cream">
+            <ShieldCheck className="h-3 w-3 mr-1" /> Source-cited answers
+          </Badge>
+          <Badge variant="secondary" className="bg-terracotta-mist text-stone border-cream">
+            <Globe className="h-3 w-3 mr-1" /> 6 Languages
+          </Badge>
+          <Badge variant="outline" className="border-cream text-stone">
+            No answer? INFORMATION UNAVAILABLE
+          </Badge>
         </div>
 
         {/* Supported States */}

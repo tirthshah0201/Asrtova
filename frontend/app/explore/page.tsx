@@ -221,7 +221,7 @@ function ExploreContent() {
                 style={{ backgroundColor: '#dc2626' }}
               >
                 <Bot className="h-3.5 w-3.5" />
-                Ask AI • Under Construction
+                Ask AI
               </a>
             </div>
             <AstrovaMap

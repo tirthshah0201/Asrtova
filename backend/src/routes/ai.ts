@@ -4,8 +4,11 @@
 
 import { Router } from "express";
 import { requireDevelopmentApiKey } from "../middleware/apiKey";
+import { optionalAuth } from "../middleware/auth";
+import { userChatRateLimit } from "../middleware/rateLimit";
 import { requireDatabase } from "../database/helpers";
 import { handleChat } from "../services/chatbot";
+import { runRagChat } from "../services/rag/chat";
 import { SUPPORTED_STATE_CODES, getWelcomeMessage } from "../config/languages";
 import { isValidLanguage, SUPPORTED_LANGUAGES, getSuggestionsForContext } from "../config/languages";
 import { query } from "../database";
@@ -21,11 +24,11 @@ const MAX_MESSAGE_LENGTH = 1000;
  * returns a grounded heritage response with suggestions.
  * Requires: X-API-Key header
  */
-router.post("/chat", requireDevelopmentApiKey, async (req, res) => {
+router.post("/chat", requireDevelopmentApiKey, optionalAuth, userChatRateLimit, async (req, res) => {
   if (!requireDatabase(res)) return;
 
   try {
-    const { message, language = "en", session_id, state } = req.body;
+    const { message, language = "en", session_id, state, conversationId, heritageId } = req.body;
 
     // Validate message
     if (!message || typeof message !== "string" || !message.trim()) {
@@ -74,11 +77,102 @@ router.post("/chat", requireDevelopmentApiKey, async (req, res) => {
       return;
     }
 
+    // ---- Phase 37 Part G: RAG path (retrieve → context → generate → cite)
+    let rag: Awaited<ReturnType<typeof runRagChat>> | null = null;
+    try {
+      rag = await runRagChat({
+        message: message.trim(),
+        language,
+        sessionId: session_id || null,
+        conversationId: typeof conversationId === "string" ? conversationId : null,
+        heritageId: typeof heritageId === "string" ? heritageId : null,
+      });
+    } catch (err) {
+      console.error("[Chat] RAG pipeline failed:", (err as Error).message);
+    }
+
+    if (rag && rag.status === "success") {
+      res.json({
+        success: true,
+        data: {
+          // Phase 37 answer contract
+          answer: rag.answer,
+          language: rag.language,
+          sources: rag.sources,
+          retrieval: {
+            count: rag.retrieval.count,
+            topK: rag.retrieval.topK,
+            minScore: rag.retrieval.minScore,
+            model: rag.retrieval.model,
+            languageFallback: rag.retrieval.languageFallback,
+            heritageFiltered: rag.retrieval.heritageFiltered,
+          },
+          status: "success",
+          generation: rag.generation,
+          conversation_id: rag.conversationId,
+          mode: "rag",
+          // legacy-compatible fields (existing consumers keep working)
+          reply: rag.answer,
+          intent: "rag",
+          state: null,
+          knowledge_ids: [],
+          suggestions: [],
+          actions: [],
+          choices: [],
+          heritage_results: [],
+        },
+      });
+      return;
+    }
+
     const response = await handleChat({
       message: message.trim(),
       language,
       sessionId: session_id,
     });
+
+    /* Phase 37 answer selection (documented):
+       - RAG success                     -> sourced RAG answer
+       - RAG no answer + steering intent  -> legacy chatbot (greeting / collection flow)
+       - RAG no answer + anything else    -> honest INFORMATION UNAVAILABLE
+                                             (the legacy keyword matcher may return an
+                                              irrelevant record, so it is not trusted here)
+       - RAG unavailable/error            -> legacy chatbot keeps the feature working */
+    const STEERING_INTENTS = new Set(["greeting", "explore_collection"]);
+    const steering = rag !== null && rag.status !== "success" && STEERING_INTENTS.has(response.intent);
+    const ragNoAnswer = rag !== null && rag.status === "no_answer" && !steering;
+
+    if (rag && ragNoAnswer) {
+      res.json({
+        success: true,
+        data: {
+          answer: rag.answer,
+          language: rag.language,
+          sources: [],
+          retrieval: {
+            count: 0,
+            topK: rag.retrieval.topK,
+            minScore: rag.retrieval.minScore,
+            model: rag.retrieval.model,
+            languageFallback: rag.retrieval.languageFallback,
+            heritageFiltered: rag.retrieval.heritageFiltered,
+          },
+          status: "no_answer",
+          generation: rag.generation,
+          conversation_id: rag.conversationId,
+          mode: "no_answer",
+          reply: rag.answer,
+          intent: "rag",
+          state: null,
+          knowledge_ids: [],
+          suggestions: response.suggestions || [],
+          actions: response.actions || [],
+          choices: response.choices || [],
+          heritage_results: [],
+        },
+      });
+      return;
+    }
 
     // Save conversation to database
     try {
@@ -113,6 +207,15 @@ router.post("/chat", requireDevelopmentApiKey, async (req, res) => {
         actions: response.actions || [],
         choices: response.choices || [],
         heritage_results: response.heritageResults || [],
+        // Phase 37: RAG answered nothing — why, and which path replied.
+        mode: "keyword_fallback",
+        answer: response.reply,
+        sources: [],
+        retrieval: { count: 0 },
+        status: "keyword_fallback",
+        rag: rag
+          ? { status: rag.status, reason: rag.unavailableReason, backend: rag.generation.backend }
+          : { status: "error", reason: "RAG pipeline threw", backend: "none" },
       },
     });
   } catch (err) {

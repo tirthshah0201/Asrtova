@@ -738,6 +738,56 @@ BE tsc+build, FE tsc, ESLint 0 errors, FE build 13/13; tests 10/10 + 4/4 + 16/16
 
 ---
 
+## Phase 37 — Heritage Situation, Operating Hours, Controlled Demo Nearby Data & RAG Chatbot (2026-09-29)
+
+### Status: COMPLETE — 4-part capability shipped against checkpoint `2358a94`; AI chatbot moved from Under Construction to a live, source-cited RAG assistant
+
+### Operating hours (Part A + B)
+- **Migration `033_p37_operating_hours_and_demo_places.sql`**: `heritage_operating_hours` — per-heritage, per-day schedule with `open_time`/`close_time`, `is_closed`, `is_24_hours`, `special_note`, `source_id`/`source_url`, `source_type`, `schedule_status` (`VERIFIED/DEMO/CONFLICT/ASTROVA_ESTIMATE`), `verification_status`, `effective_from`/`effective_until`, plus a `hours_shape_valid` CHECK and two partial unique indexes (default + dated rows). Timezone lives on `heritage_entities.timezone` (default `Asia/Kolkata`, non-empty CHECK) so future international sites can carry their own.
+- **DEMO dataset (4 entities / 28 rows):** Qutub Minar 07:00–17:00 and Hawa Mahal 09:00–18:30 (from OpenStreetMap `opening_hours` nodes, `source_url` recorded), Amber Fort 07:00–20:00 (Rajasthan Tourism portal) and Red Fort 09:30–16:30 (ASI seven-day report) — the last two are stored `schedule_status = CONFLICT` because other widely published listings disagree (Amber 08:00–17:30; Red Fort Monday closure), so the UI shows **“Hours in conflict — requires review”** instead of an open/closed claim.
+- Every demo row is `source_type = DEMO` and can never be `VERIFIED` (schema CHECK). Public UI labels it **“Demo hours — not verified”**.
+
+### Current heritage situation (Part C + D)
+- `backend/src/services/operatingHours.ts`: pure, timezone-aware `computeSituation` returning `OPEN / CLOSED / CLOSING_SOON / OPENING_SOON / OPEN_24_HOURS / CLOSED_TODAY / INFORMATION_UNAVAILABLE` with `label`, `reason`, `today`, `nextChange{kind,dayOffset,at,inMinutes}`, `dataOrigin`, `conflict`.
+- **Timezone is mandatory**: `zonedNow(date, timeZone)` uses `Intl` with the heritage's own zone (never the server's); day-of-week, midnight crossings and Sunday→Monday are derived from the zoned calendar, and closed/missing schedules produce `INFORMATION_UNAVAILABLE` — never a manufactured time.
+- Live proof: at 01:02 IST Qutub Minar → `CLOSED`, “Opens today at 07:00”, `inMinutes: 386` to the minute; Amber Fort/Red Fort → conflict, no claim.
+
+### Controlled demo nearby dataset (Part E + F)
+- **`demo_places` table**: 11 approved categories (`HOTEL, RESTAURANT, CAFE, PARKING, MUSEUM, ATTRACTION, TRANSPORT, ATM, PHARMACY, HOSPITAL, SHOPPING`), `source_type` CHECK pinned to `DEMO`, `verification_status` can never be `VERIFIED`, no Null Island (`NOT (lat=0 AND lon=0)`), unique `(heritage, name, category)`. **22 rows seeded from real OpenStreetMap nodes** (names + coordinates + addresses; `source_url` per record) around Amber Fort, Qutub Minar and Sabarmati Ashram.
+- No fake ratings, reviews, prices, availability or booking links — those columns deliberately do not exist.
+- **Order preserved: OSM/Overpass → Astrova DB → DEMO → INFORMATION UNAVAILABLE**, and every response carries an `origin` label so sources are never silently mixed. Existing stay module still refuses to claim price/availability.
+
+### RAG chatbot (Part G–R) — real retrieval, not a prompt-forward
+- **Pipeline:** question → language detection → normalisation + injection screen → `Xenova/multilingual-e5-small` embedding (384-dim, q8, ONNX runtime — no proprietary key) → pgvector cosine retrieval → provenance/tier re-ranking → threshold → context assembly → generation → answer + `[n]` citations → conversation storage.
+- **Migration `034_p37_rag_knowledge.sql`**: `CREATE EXTENSION vector` (Neon supports pgvector — verified), `rag_chunks` with `content_hash UNIQUE` (sha256 duplicate prevention), language CHECK over the 6 supported codes, `authority_tier`, `license`, `source_url`, `verification_status` CHECK that **cannot store `REJECTED`**, embedding column + HNSW/IVF index, `rag_retrievals`, `rag_ingest_runs`.
+- **207 chunks ingested** from Astrova's own trusted data: en 175, hi 8, gu 7, ta 6, mr 6, pa 5; tiers T1 122, T2 14, T5 4, unrated 67; 70 VERIFIED. Re-ingest is idempotent (207 seen → 0 inserted).
+- **Retrieval is explainable**: raw similarity + documented bonuses (`+0.01/tier above T5`, `+0.02 VERIFIED`, `+0.01 REVIEWED`), configurable top-K (default 5, clamped 1–20) and calibrated `minScore = 0.8` (on-topic ≥0.81, off-topic ≤0.78 in this model).
+- **Multilingual (Part O):** one shared knowledge base, not six. Language-filtered retrieval first, then an honest shared-base fallback — an Hindi Charminar question answers from the English Charminar chunk with `languageFallback: true`. Verified live in en/hi/gu/ta/pa (+declared mr).
+- **Answer contract (Part M/N):** `VERIFIED / LIVE DATA / ASTROVA ESTIMATE / DEMO / INFORMATION UNAVAILABLE / CONFLICT / PROPOSAL`. `no_answer` responses return **zero sources** and the explicit sentence “INFORMATION UNAVAILABLE”. Only chunks actually cited as `[n]` are returned in `sources` (no dumping the retrieval window). Reviewer e-mails/notes/internal IDs/embeddings never leave the API (asserted by tests).
+- **Security (Part R):** API-key + per-IP (30/min) + per-user (20/min) rate limits, 1000-char message bound, injection detection on the question **and** on every candidate sentence (an “ignore previous instructions” chunk is never quoted), retrieved context is fenced and labelled as data in the prompt, safe error messages, no stack traces.
+- **Generation honesty (Part K):** no LLM runtime exists in this environment (`LLM_API_KEY` empty, no Ollama on :11434 — both probed). The adapter chain is Ollama → OpenAI-compatible → **local extractive composer**, and the active backend is reported in `generation.backend` + a plain-language reason. The composer only quotes retrieved sentences with their `[n]` citation; it never invents text.
+
+### UI (Part S + T + U)
+- `/ai` replaced Under Construction with the working chat: input, send, loading, answers, **source cards with authority tier badges (OFFICIAL/INSTITUTIONAL/OPEN DATASET)**, an amber INFORMATION UNAVAILABLE banner, language selector, mobile layout, keyboard-accessible controls. All 14 stale “Under Construction” labels across home/explore/detail/search/map/footer removed (honesty: they were now false).
+- Visitor Intelligence gained a **Current Situation** block: status dot + label, site-local time with timezone, “Today: 07:00 – 17:00 · Opens in about 5h 58m”, next-change math, and the origin line (“Demo hours — not verified” / INFORMATION UNAVAILABLE / conflict).
+- Admin gained a tenth **“Data Ops”** tab: RAG status (pgvector, model, 207/207 embedded, language split, generation backend + reason, idempotent rebuild), operating-hours table + create/delete form, demo-places table + create/delete form. Everything behind the existing `requireAdmin`.
+
+### Verification
+- **Tests 186 green** (9 suites): db-audit **47/47** (extended for hours/demo/rag tables), data-quality 12/12, enrichment 4/4, enrichment-review 14/14, visit-module 16/16, visitor-intelligence 10/10, **operating-hours 34/34**, **demo-data 17/17**, **RAG 32/32**. Migrations **34/34**. Backend `tsc --noEmit` + build 0; frontend `tsc --noEmit` + `next build` 0 (13/13 pages).
+- **RAG E2E over HTTP**: en/hi/gu/ta/pa answers with citations; injection question → `no_answer` + INFORMATION UNAVAILABLE; off-topic question → `no_answer`; `401` without API key; admin endpoints `401` without session.
+- **Regression:** 15 routes 200 + 10 API surfaces 200 (search/suggestions/timeline/locations/sources/collections/periods/connectivity/enrichment/heritage).
+- **Responsive (real viewport resize):** `/ai` at all 10 widths (1440→360), `/heritage/qutub-minar` at 360/768/1440, `/admin` Data Ops at 360/768/1440 — `scrollWidth === clientWidth` everywhere.
+- **Accessibility:** 0 unlabeled inputs, 0 unnamed buttons, 0 missing alt, 1 h1, `lang=en`, landmarks present on home/detail/admin/AI (lat-long fields fixed with `aria-label`, chat input + Send button labelled).
+- **Performance:** search 89 ms, heritage list 170 ms, detail 247 ms, VI cached 249 ms, nearby cached 161 ms, **RAG chat p50 503 ms (en) / 841 ms (hi)**, retrieval alone 82 ms warm, `computeSituation` 0.27 ms p50.
+
+### Known limitations
+- Generation is **extractive, not abstractive** — no LLM runtime is available in this environment; adding Ollama or `LLM_API_KEY` switches the same adapter to free-form answers with no code change.
+- Only 4 of 96 entities have operating hours (28 rows); the rest correctly report `INFORMATION UNAVAILABLE`.
+- Hindi/Gujarati chunk coverage is small (8/7) — cross-lingual fallback carries the rest, and answers in that case quote the source language.
+- `test-media-upload.js` still fails on the pre-existing missing `form-data` dependency (not this phase).
+
+---
+
 ## Phase 36 — Trusted Heritage Data Refinement + Provenance + Controlled Enrichment (2026-09-28)
 
 ### Status: COMPLETE — 34 ordered steps executed; Feature H advanced to PARTIAL (human-gated review workflow live; unattended public approval still PLANNED)

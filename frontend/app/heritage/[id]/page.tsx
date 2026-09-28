@@ -655,7 +655,7 @@ export default function HeritageDetailPage({
               />
             )}
 
-            {/* Ask Astrova — Under Construction */}
+            {/* Ask Astrova — live RAG chat */}
             <div className="mb-16">
               <div className="max-w-3xl mx-auto">
                 <div className="p-8 rounded-2xl border" style={{ background: 'linear-gradient(135deg, #fef2f2, #fee2e2)', borderColor: '#fecaca' }}>
@@ -665,14 +665,14 @@ export default function HeritageDetailPage({
                     </div>
                     <div className="flex-1">
                       <h3 className="font-display text-xl text-charcoal mb-2">Want to explore this heritage further?
-                        <span className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold align-middle" style={{ backgroundColor: '#fee2e2', color: '#dc2626' }}>Under Construction</span>
+                        <span className="ml-2 inline-flex items-center rounded-full px-2 py-0.5 text-xs font-semibold align-middle" style={{ backgroundColor: '#dcfce7', color: '#15803d' }}>Live</span>
                       </h3>
                       <p className="text-muted">Ask Astrova for AI-powered insights about {heritage.name}.</p>
                     </div>
                     <Link href={`/ai?question=Tell me about ${encodeURIComponent(heritage.name)}${location ? ` in ${encodeURIComponent(location.state)}` : ""}`}>
                       <Button size="lg" variant="ghost" style={{ backgroundColor: '#dc2626', color: '#ffffff' }} className="font-semibold">
                         <Sparkles className="h-4 w-4 mr-2" />
-                        Ask Astrova • Under Construction
+                        Ask Astrova
                       </Button>
                     </Link>
                   </div>
