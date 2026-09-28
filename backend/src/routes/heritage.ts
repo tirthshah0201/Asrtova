@@ -22,6 +22,8 @@ import {
 import { getNearbyForEntity, isValidEntityId } from "../services/nearby";
 import { estimateVisitCost, normalizeCostInput } from "../services/visitCostEstimator";
 import { getEnrichment } from "../services/enrichment";
+import { publicReviewFor } from "../services/enrichmentReview";
+import { tierLabel, tierForSourceType } from "../services/dataQuality";
 
 const router = Router();
 
@@ -412,7 +414,42 @@ router.get(
         latitude: row.latitude == null ? null : Number(row.latitude),
         longitude: row.longitude == null ? null : Number(row.longitude),
       });
-      res.json({ success: true, data: result });
+
+      /* Phase 36 — public-safe review annotation.
+         - REJECTED proposals are hidden entirely.
+         - Reviewer notes/emails are never included.
+         - Each surviving proposal carries a review status so the UI
+           can show VERIFIED vs PROPOSAL vs CONFLICT REQUIRES REVIEW. */
+      const reviews = await publicReviewFor(row.id);
+      const externalId = result.candidate?.wikidataId ?? "";
+      const annotatedProposals = result.proposals.flatMap((proposal) => {
+        const review = reviews.get(`${externalId}|${proposal.field}|${proposal.value}`);
+        // REJECTED proposals are hidden from the public API entirely.
+        if (review?.status === "REJECTED") return [];
+        return [
+          {
+            ...proposal,
+            review: {
+              status: review?.status ?? "PENDING_REVIEW",
+              reviewedAt: review?.reviewedAt ?? null,
+            },
+          },
+        ];
+      });
+
+      const data = {
+        ...result,
+        proposals: annotatedProposals,
+        meta: {
+          ...result.meta,
+          reviewCounts: {
+            verified: [...reviews.values()].filter((r) => r.status === "VERIFIED").length,
+            pending: [...reviews.values()].filter((r) => r.status === "PENDING_REVIEW").length,
+            conflict: [...reviews.values()].filter((r) => r.status === "CONFLICT").length,
+          },
+        },
+      };
+      res.json({ success: true, data });
     } catch (err) {
       console.error("[Enrichment] Error:", (err as Error).message);
       res.status(502).json({
@@ -447,7 +484,8 @@ router.get(
           json_build_object(
             'id', s.id, 'title', s.title, 'publisher', s.publisher, 'author', s.author,
             'url', s.url, 'source_type', s.source_type, 'verification_status', s.verification_status,
-            'publication_date', s.publication_date, 'retrieved_date', s.retrieved_date
+            'publication_date', s.publication_date, 'retrieved_date', s.retrieved_date,
+            'authority_tier', s.authority_tier, 'license', s.license, 'verified_date', s.verified_date
           ) as source,
           CASE WHEN l.id IS NOT NULL THEN json_build_object(
             'id', l.id, 'name', l.name, 'slug', l.slug, 'type', l.type,
@@ -525,6 +563,19 @@ router.get(
         LIMIT 6
       `;
       const { rows: relatedRows } = await query(relatedSql, [heritage.id]);
+
+      // Phase 36 provenance annotation: authority tier label for the UI.
+      // Falls back to the source_type mapping only when no tier was
+      // recorded; never claims a tier the data does not support.
+      const source = heritage.source as Record<string, unknown> | null;
+      if (source && source.id) {
+        const recordedTier =
+          source.authority_tier == null ? null : Number(source.authority_tier);
+        const tier =
+          recordedTier ?? tierForSourceType(source.source_type as string | null);
+        source.authority_tier = tier;
+        source.tier_label = tierLabel(tier);
+      }
 
       res.json({
         success: true,

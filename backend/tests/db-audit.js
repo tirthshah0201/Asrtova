@@ -10,6 +10,7 @@ const REQUIRED_TABLES = [
   "sources", "collections", "collection_items", "users", "user_favorites",
   "chatbot_knowledge", "conversations", "conversation_messages",
   "supported_states", "relationships", "analytics_events",
+  "enrichment_proposals", // Phase 36 (migration 032)
 ];
 
 async function main() {
@@ -111,6 +112,73 @@ async function main() {
     "SELECT count(*)::int AS n FROM information_schema.table_constraints WHERE constraint_type='FOREIGN KEY' AND table_schema='public'"
   );
   ok("foreign keys", String(fks.rows[0].n));
+
+  /* ---- Phase 36 trusted-data checks ---- */
+
+  // No NULL slugs remain (migration 031 remediation)
+  if (tableSet.has("heritage_entities")) {
+    try {
+      const ns = await pool.query(
+        "SELECT count(*)::int AS n FROM heritage_entities WHERE slug IS NULL"
+      );
+      ns.rows[0].n === 0 ? ok("null slugs", "0") : fail("null slugs", String(ns.rows[0].n));
+
+      const dup = await pool.query(
+        "SELECT slug, count(*)::int AS n FROM heritage_entities WHERE slug IS NOT NULL GROUP BY slug HAVING count(*) > 1"
+      );
+      dup.rows.length === 0
+        ? ok("duplicate slugs", "0")
+        : fail("duplicate slugs", dup.rows.map((r) => r.slug).join(", "));
+    } catch (e) {
+      fail("slug integrity", e.message);
+    }
+  }
+
+  // Source provenance columns (migration 031): tier, license, verified_date
+  if (tableSet.has("sources")) {
+    try {
+      const c = await pool.query(
+        "SELECT column_name FROM information_schema.columns WHERE table_schema='public' AND table_name='sources'"
+      );
+      const have = new Set(c.rows.map((x) => x.column_name));
+      const missing = ["authority_tier", "license", "verified_date"].filter((x) => !have.has(x));
+      missing.length === 0
+        ? ok("sources provenance cols", "authority_tier, license, verified_date present")
+        : fail("sources provenance cols", "missing " + missing.join(","));
+
+      const tiers = await pool.query(
+        "SELECT count(*)::int AS n FROM sources WHERE authority_tier IS NULL"
+      );
+      tiers.rows[0].n === 0
+        ? ok("source tiers", "all sources tiered")
+        : fail("source tiers", `${tiers.rows[0].n} untiered`);
+    } catch (e) {
+      fail("source provenance", e.message);
+    }
+  }
+
+  // enrichment_proposals shape (migration 032)
+  if (tableSet.has("enrichment_proposals")) {
+    try {
+      const statuses = await pool.query(
+        "SELECT DISTINCT status FROM enrichment_proposals"
+      );
+      const valid = new Set(["DRAFT", "PENDING_REVIEW", "VERIFIED", "REJECTED", "CONFLICT"]);
+      const bad = statuses.rows.map((r) => r.status).filter((s) => !valid.has(s));
+      bad.length === 0
+        ? ok("proposal statuses", `${statuses.rows.length} distinct, all valid`)
+        : fail("proposal statuses", "invalid: " + bad.join(","));
+      const orphan = await pool.query(
+        `SELECT count(*)::int AS n FROM enrichment_proposals p
+         LEFT JOIN heritage_entities he ON p.entity_id = he.id WHERE he.id IS NULL`
+      );
+      orphan.rows[0].n === 0
+        ? ok("proposal FK integrity", "no orphans")
+        : fail("proposal FK integrity", `${orphan.rows[0].n} orphans`);
+    } catch (e) {
+      fail("enrichment_proposals", e.message);
+    }
+  }
 
   printAndExit(results, pool);
 }

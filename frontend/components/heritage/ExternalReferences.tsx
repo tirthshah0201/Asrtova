@@ -24,6 +24,10 @@ interface EnrichmentField {
     license: string;
     retrievedAt: string;
   };
+  review?: {
+    status: "PENDING_REVIEW" | "VERIFIED" | "CONFLICT";
+    reviewedAt: string | null;
+  };
 }
 
 interface EnrichmentData {
@@ -51,7 +55,39 @@ interface EnrichmentData {
     license: string;
     approvalStatus: "pending_review" | "not_applicable";
     note: string;
+    reviewCounts?: {
+      verified: number;
+      pending: number;
+      conflict: number;
+    };
   };
+}
+
+/**
+ * Status badge labels (Step 13): the UI must make it obvious whether a
+ * fact is a Verified reference, a Proposal awaiting review, or a
+ * Conflict requiring review.
+ */
+function ReviewBadge({ status }: { status: NonNullable<EnrichmentField["review"]>["status"] }) {
+  if (status === "VERIFIED") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-green-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-green-700">
+        Verified
+      </span>
+    );
+  }
+  if (status === "CONFLICT") {
+    return (
+      <span className="inline-flex items-center gap-1 rounded-full bg-amber-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-amber-700">
+        Conflict — requires review
+      </span>
+    );
+  }
+  return (
+    <span className="inline-flex items-center gap-1 rounded-full bg-stone-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider text-stone-600">
+      Proposal
+    </span>
+  );
 }
 
 const FIELD_LABELS: Record<string, string> = {
@@ -91,7 +127,7 @@ export function ExternalReferences({ heritageId }: ExternalReferencesProps) {
         </div>
         {!loading && !error && data && (
           <span className="text-[11px] uppercase tracking-wider text-muted">
-            {data.meta.provider} · {data.meta.license}
+            {data.meta.provider} · {data.meta.license} · Open Dataset
           </span>
         )}
       </div>
@@ -213,18 +249,21 @@ export function ExternalReferences({ heritageId }: ExternalReferencesProps) {
                         {FIELD_LABELS[proposal.field] || proposal.field}
                       </dt>
                       <dd className="text-charcoal flex-1 min-w-0 break-words">
-                        {proposal.field === "official_website" ? (
-                          <a
-                            href={proposal.value}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="text-terracotta hover:underline break-all"
-                          >
-                            {proposal.value}
-                          </a>
-                        ) : (
-                          proposal.value
-                        )}
+                        <span className="flex flex-wrap items-center gap-2">
+                          {proposal.field === "official_website" ? (
+                            <a
+                              href={proposal.value}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="text-terracotta hover:underline break-all"
+                            >
+                              {proposal.value}
+                            </a>
+                          ) : (
+                            proposal.value
+                          )}
+                          <ReviewBadge status={proposal.review?.status ?? "PENDING_REVIEW"} />
+                        </span>
                       </dd>
                     </div>
                   ))}

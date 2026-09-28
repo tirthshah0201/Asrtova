@@ -1,5 +1,37 @@
 # Astrova — Project Report
 
+## Phase 36 — Trusted Heritage Data Refinement + Provenance + Controlled Enrichment (2026-09-28)
+
+Status: **COMPLETE** — 34 ordered steps executed against checkpoint `67d7cb7`; Feature H advanced to **PARTIAL (advanced)**: a human-gated review workflow is live, unattended public approval remains PLANNED.
+
+### What shipped
+- **Migrations 30→32 (both applied):** `031_p36_trusted_data.sql` (22 guarded slug updates for the slug-less migration-030 entities, `sources.authority_tier` / `license` / `verified_date`, `OPEN_DATASET` source type, canonical UNESCO URL) and `032_p36_enrichment_review.sql` (`enrichment_proposals` with `UNIQUE(entity, external, field, value)`, status CHECK, touch trigger).
+- **New backend services:** `dataQuality.ts` (tier model, proposal-field whitelist + validation, review state machine, duplicate scoring) and `enrichmentReview.ts` (guarded insert-only sync that never resets a `VERIFIED`/`REJECTED` decision, transition-validated review, public projection that strips reviewer notes/e-mails, read-only duplicate scan).
+- **Four admin endpoints** behind `requireAdmin`: proposal listing, `verify|reject|reopen` review, single-entity bounded refresh, duplicate scan.
+- **Public contract:** `GET /api/heritage/:id/enrichment` annotates `review{status,reviewedAt}`, hides `REJECTED`, returns `meta.reviewCounts`; `GET /api/heritage/:id` exposes `authority_tier`, `tier_label`, `license`, `verified_date`.
+- **Frontend:** review badges in `ExternalReferences`, source-tier badge on the detail page, and a ninth admin tab **“Data Review”** (queue + status filter, verify/reject/reopen with admin-only note, UUID extraction tool, duplicate-scan panel).
+- **Data state after the phase:** 23/23 sources tiered (T1 18, T2 4, T3 1) and licensed; 0 null slugs; 96 heritage entities unchanged.
+
+### Decisions made honestly
+- **Timeline (Step 18):** no period assignments were added. 44/96 entities remain unassigned because period ranges overlap (Charminar's stated 1591 sits inside both `Ahom 1228–1826` and `Colonial 1573–1947`) and most new records are living traditions or natural sites with no founding date. Timeline stays at 9 periods / 52 entities rather than fabricating provenance.
+- **Review state machine:** `VERIFIED` and `REJECTED` cannot flip directly — `reopen` is an explicit admin action. Refreshes touch only `DRAFT`/`PENDING_REVIEW` rows.
+- **Duplicates:** reported as `POSSIBLE DUPLICATE` only; conflicts render `CONFLICT — REQUIRES REVIEW`; missing data renders `INFORMATION UNAVAILABLE`.
+
+### Verification (all executed 2026-09-28)
+- Tests **97 checks green**: db-audit 41/41, data-quality 12/12, enrichment 4/4, enrichment-review 14/14, visit-module 16/16, visitor-intelligence 10/10; migrations 32/32; backend `tsc --noEmit` + build 0; frontend `tsc --noEmit` 0. `test-media-upload.js` still fails on the pre-existing missing `form-data` dependency (not this phase).
+- Live E2E: tier/license/verified-date on `deepavali` (T1 OFFICIAL); `charminar` enrichment with 5 proposals + `reviewCounts`; `verify → reject` refused with `INVALID_TRANSITION`; rejected proposals hidden publicly; reviewer notes never leaked; duplicate scan 96 scanned / 0 pairs in 0.34 s.
+- Security: 401 without session, 403 for a demoted session, all SQL parameterized (single column interpolation is a hard-coded whitelist), rate limits intact, no secrets in the diff.
+- Performance: every probed endpoint 82–242 ms (5 samples each).
+- Regression: 13/13 routes 200 + 7 API surfaces 200; AI page still Under Construction.
+- Responsive (real viewport resize): `/` × 10 widths, `/heritage/charminar` × 7 widths, `/admin` Data Review × 3 widths — `scrollWidth === clientWidth` everywhere.
+- Accessibility: `lang=en`, 1 h1, landmarks present, 0 missing alt / 0 unlabeled inputs / 0 unnamed controls on home, detail and the new review tab.
+- Builds: backend `tsc` 0; `next build` 13/13 pages; dev server still 200 afterwards.
+- Hygiene: temporary QA admin demoted to `role='user'`; `admin@astrova.in` untouched and the only remaining admin.
+
+Git: these changes are committed separately as `feat(astrova): refine trusted heritage data and provenance` (previous checkpoint `67d7cb7` was not amended).
+
+---
+
 ## Final Verification Pass — Phases 19–35 (2026-09-27, third session)
 
 Full re-verification of the shipped code with real-viewport browser measurements, a fresh accessibility audit, the complete user-flow and error-matrix regressions, provenance/provider/stay-boundary reviews, and a final build/test/security/performance run. New findings were fixed, verified, and committed on top of `56eea21`.
@@ -302,7 +334,7 @@ Expanded the visitor-information section into the full Heritage Visit Intelligen
 - **Feature D (cost estimator)** — documented model rate card, min/typical/max INR, category breakdown, per-line `astrova_model` provenance, `officialFee: null`, input clamping.
 - **Feature E (nearby heritage)** — haversine over Astrova's own coordinates, top 8.
 - **Feature F/G (nearby places + stays)** — OpenStreetMap/Overpass within 3 km, named records only, website/phone/stars only when present; no ratings/prices/availability.
-- **Feature H (trusted data)** — existing `sources` provenance + verification status surfaced; migration 030 added four authoritative sources; automated external ingestion pipeline remains PLANNED.
+- **Feature H (trusted data)** — existing `sources` provenance + verification status surfaced; migration 030 added four authoritative sources; **Phase 36 (2026-09-28)** added authority tiers, licenses, persisted `enrichment_proposals` and a human admin review workflow; unattended automated approval into curated fields remains PLANNED (Feature H stays PARTIAL).
 - New endpoints `GET /api/heritage/:id/nearby` and `GET /api/heritage/:id/visit-cost` with API-key protection and per-IP rate limits (30/20/60 per 10 min).
 
 ### Verification (all executed 2026-09-27)

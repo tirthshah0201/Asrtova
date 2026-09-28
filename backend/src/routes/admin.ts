@@ -16,6 +16,13 @@ import { isValidSlug } from "../utils/slug";
 import { generateToken, setAuthCookie, optionalAuth } from "../middleware/auth";
 import { adminLoginRateLimit } from "../middleware/rateLimit";
 import { uploadMedia, getMediaUrl, deleteMediaFile, extractFilenameFromUrl, getMediaType } from "../utils/upload";
+import { getEnrichment, clearEnrichmentCache } from "../services/enrichment";
+import {
+  listProposals,
+  reviewProposal,
+  syncProposals,
+  scanPossibleDuplicates,
+} from "../services/enrichmentReview";
 
 const router = Router();
 
@@ -1510,6 +1517,157 @@ router.post("/analytics/track", async (req, res) => {
   } catch (err) {
     // Analytics should not fail the request
     res.json({ success: true });
+  }
+});
+
+// ============================================================
+// DATA REVIEW (Phase 36 — controlled enrichment workflow)
+// All routes below sit behind router.use(requireAdmin) (line ~165).
+// Approval is reference-only: VERIFIED proposals are stored as
+// verified references with provenance and NEVER write into
+// heritage_entities.
+// ============================================================
+
+/**
+ * GET /api/admin/enrichment/proposals
+ * List persisted enrichment proposals for review.
+ * Query: ?status=PENDING_REVIEW|CONFLICT|VERIFIED|REJECTED|DRAFT&entityId=<uuid>&limit=&offset=
+ */
+router.get("/enrichment/proposals", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const status = req.query.status ? String(req.query.status) : undefined;
+    const entityId = req.query.entityId ? String(req.query.entityId) : undefined;
+    if (entityId && !isValidUUID(entityId)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "entityId must be a UUID." } });
+      return;
+    }
+    const result = await listProposals({
+      status,
+      entityId,
+      limit: req.query.limit ? parseInt(String(req.query.limit)) || undefined : undefined,
+      offset: req.query.offset ? parseInt(String(req.query.offset)) || undefined : undefined,
+    });
+    res.json({ success: true, data: { proposals: result.rows, total: result.total } });
+  } catch (err) {
+    console.error("[Admin Enrichment] List error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Failed to load proposals." } });
+  }
+});
+
+/**
+ * POST /api/admin/enrichment/proposals/:id/review
+ * Body: { action: "verify" | "reject" | "reopen", note?: string }
+ * Validates status transitions; reviewer identity comes from the
+ * authenticated admin session, never from the request body.
+ */
+router.post("/enrichment/proposals/:id/review", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const proposalId = String(req.params.id);
+    if (!isValidUUID(proposalId)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "Proposal id must be a UUID." } });
+      return;
+    }
+    const action = String(req.body?.action ?? "");
+    if (action !== "verify" && action !== "reject" && action !== "reopen") {
+      res.status(400).json({ success: false, error: { code: "INVALID_ACTION", message: "action must be verify, reject, or reopen." } });
+      return;
+    }
+    const note = req.body?.note != null ? String(req.body.note) : undefined;
+    const user = req.user as { email?: string; name?: string } | undefined;
+    const reviewer = user?.email || user?.name || "admin";
+
+    const result = await reviewProposal({ proposalId, action, reviewer, note });
+    if (!result.ok) {
+      const notFound = /not found/i.test(result.error ?? "");
+      res.status(notFound ? 404 : 409).json({
+        success: false,
+        error: { code: notFound ? "NOT_FOUND" : "INVALID_TRANSITION", message: result.error ?? "Review failed." },
+      });
+      return;
+    }
+    res.json({ success: true, data: { status: result.status } });
+  } catch (err) {
+    console.error("[Admin Enrichment] Review error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Review action failed." } });
+  }
+});
+
+/**
+ * POST /api/admin/enrichment/refresh/:entityId
+ * Admin-triggered extraction + validation + persistence for one entity.
+ * External call is bounded (single entity, 5s timeout, 24h cache) and
+ * never blocks public page requests.
+ */
+router.post("/enrichment/refresh/:entityId", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const entityId = String(req.params.entityId);
+    if (!isValidUUID(entityId)) {
+      res.status(400).json({ success: false, error: { code: "INVALID_ID", message: "entityId must be a UUID." } });
+      return;
+    }
+    const { rows } = await query<{
+      id: string; name: string; slug: string;
+      latitude: number | string | null; longitude: number | string | null;
+    }>(
+      `SELECT he.id, he.name, he.slug, l.latitude, l.longitude
+         FROM heritage_entities he
+         LEFT JOIN locations l ON he.location_id = l.id
+        WHERE he.id = $1`,
+      [entityId]
+    );
+    if (rows.length === 0) {
+      res.status(404).json({ success: false, error: { code: "NOT_FOUND", message: "Heritage entity not found." } });
+      return;
+    }
+    const row = rows[0];
+    clearEnrichmentCache(); // admin refresh should not serve stale cache
+    const result = await getEnrichment({
+      name: row.name,
+      slug: row.slug,
+      wikidataId: null,
+      latitude: row.latitude == null ? null : Number(row.latitude),
+      longitude: row.longitude == null ? null : Number(row.longitude),
+    });
+    const summary = await syncProposals(entityId, result);
+    res.json({
+      success: true,
+      data: {
+        enrichment_status: result.status,
+        conflicts: result.conflicts,
+        inserted: summary.inserted,
+        refreshed: summary.refreshed,
+        skipped: summary.skipped,
+        notes: summary.reasons.slice(0, 20),
+      },
+    });
+  } catch (err) {
+    console.error("[Admin Enrichment] Refresh error:", (err as Error).message);
+    res.status(502).json({ success: false, error: { code: "ENRICHMENT_UNAVAILABLE", message: "External reference refresh failed." } });
+  }
+});
+
+/**
+ * GET /api/admin/enrichment/duplicates
+ * Read-only POSSIBLE DUPLICATE scan. Never merges or deletes.
+ */
+router.get("/enrichment/duplicates", async (req, res) => {
+  if (!requireDatabase(res)) return;
+  try {
+    const result = await scanPossibleDuplicates();
+    res.json({
+      success: true,
+      data: {
+        pairs: result.pairs,
+        scanned: result.scanned,
+        note: "Flags are advisory only — no records are merged or deleted automatically.",
+      },
+    });
+  } catch (err) {
+    console.error("[Admin Enrichment] Duplicate scan error:", (err as Error).message);
+    res.status(500).json({ success: false, error: { code: "DATABASE_ERROR", message: "Duplicate scan failed." } });
   }
 });
 

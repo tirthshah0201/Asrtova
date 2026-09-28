@@ -629,10 +629,11 @@ NO PUSH PERFORMED — documentation only
 | Admin Media Upload | ✅ Complete (Image + Video, proxy upload + uploads passthrough) |
 | Heritage Visit Intelligence (Features A–G) | ✅ IMPLEMENTED (2026-09-27, verified end-to-end) |
 | Heritage Situation (live status) | ⏸ Honest unavailable state — trusted source integration PLANNED |
-| Trusted external ingestion pipeline (Feature H) | 🟡 PARTIAL (advanced) — provenance via `sources` + verification_status + `ExternalReferences` UI + stateless Wikidata proposals (`enrichment.ts`, 4/4 tests); automated approval pipeline PLANNED |
+| Trusted external ingestion pipeline (Feature H) | 🟡 PARTIAL (advanced) — provenance via `sources` + verification_status + `ExternalReferences` UI + stateless Wikidata proposals (`enrichment.ts`, 4/4 tests); **Phase 36 adds** persisted `enrichment_proposals` + authority tiers + admin review workflow (verify/reject/reopen) + public review badges; unattended/automated public approval pipeline PLANNED |
 | About | ✅ Complete |
 | AI Chatbot | ⏸ Under Construction |
 | Documentation | ✅ Complete |
+| Trusted data refinement + provenance + review (Phase 36) | ✅ Complete (2026-09-28) — 2 migrations, 23/23 sources tiered, review queue live, 97 checks green |
 
 ### Final GitHub Checkpoint
 - Branch: main
@@ -734,3 +735,56 @@ sources 22 (0 dups, 100% status+retrieved), heritage 96 (0 dup slugs), migration
 
 ### Phases 26–28 — Build/test/security/performance
 BE tsc+build, FE tsc, ESLint 0 errors, FE build 13/13; tests 10/10 + 4/4 + 16/16; db-audit 34/34. Security: nothing sensitive tracked/staged, no client key, parameterized SQL, admin `requireAdmin` boundary intact, no stack traces; live 401/401/401/400/401/404 probes PASS (admin full login honestly unverified — credentials unknown). Performance observed: VI 1.19 s cold → 0.079 s warm (cap 200), nearby warm 0.24 s (cap 100), **Overpass cold 13–30 s today** (failed attempt correctly uncached — no poisoning); parallel `Promise.allSettled`; detail-page-only provider calls.
+
+---
+
+## Phase 36 — Trusted Heritage Data Refinement + Provenance + Controlled Enrichment (2026-09-28)
+
+### Status: COMPLETE — 34 ordered steps executed; Feature H advanced to PARTIAL (human-gated review workflow live; unattended public approval still PLANNED)
+
+### Audit findings (Steps 1–5, no code written until the audit closed)
+- Migrations **30/30 applied**; heritage **96**, locations **54**, sources **22** (pre-phase), periods **9**.
+- 22 migration-030 entities had **NULL slugs** → links fell back to UUIDs; **0 null slugs remain** (22 guarded slug updates in migration 031, `WHERE slug IS NULL` + uniqueness guards, no curated slug rewritten).
+- `sources` had **no authority tier / license / verified-date columns**; provenance depth stopped at `verification_status`.
+- Duplicate-slug risk was untested at the DB layer; enrichment proposals were **stateless** (computed, never stored) so nothing could be reviewed, rejected or audited later.
+
+### Data-quality + provenance fixes (Steps 6–9)
+- **Migration `031_p36_trusted_data.sql`**: 22 guarded slug updates; `sources.authority_tier`, `sources.license`, `sources.verified_date`; `OPEN_DATASET` added to the `source_type` CHECK; canonical UNESCO URL fixed to `https://whc.unesco.org/en/list/`; every source tiered (**T1 18 / T2 4 / T3 1 — 23/23 tiered, 23/23 licensed**).
+- **Migration `032_p36_enrichment_review.sql`**: `enrichment_proposals` table with `UNIQUE(entity, external, field, value)`, status CHECK (`DRAFT/PENDING_REVIEW/VERIFIED/REJECTED/CONFLICT`) and a `touch` trigger. Migrations now **32/32 applied**.
+- Tier labels are user-facing: T1 `OFFICIAL` (official/UNESCO/ASI/government/tourism board/archive), T2 `INSTITUTIONAL` (academic/museum), T3 `OPEN DATASET` (Wikidata), T4 geographic-only (OSM), T5 `ASTROVA ESTIMATE`.
+
+### Controlled enrichment + review workflow (Steps 10–15)
+- `backend/src/services/dataQuality.ts` (436 lines, pure helpers): tier mapping/labels, proposal-field whitelist, validation (markup rejected, non-http(s) rejected, fuzzy years rejected, Null Island `0,0` rejected, malformed QIDs rejected), state-machine `canTransition`, duplicate scoring (`POSSIBLE DUPLICATE` threshold 0.75), slug safety.
+- `backend/src/services/enrichmentReview.ts` (381 lines): guarded `syncProposals` (insert-only; refresh touches **only DRAFT/PENDING_REVIEW — VERIFIED/REJECTED are never reset**), listing, transition-validated `reviewProposal` (reviewer taken from the session, never the request body), `publicReviewFor` (never exposes reviewer notes/e-mails), read-only `scanPossibleDuplicates`.
+- `admin.ts` +4 endpoints behind `requireAdmin`: `GET /enrichment/proposals`, `POST /enrichment/proposals/:id/review` (verify|reject|reopen), `POST /enrichment/refresh/:entityId` (one bounded Wikidata call, 5 s timeout, cache cleared first), `GET /enrichment/duplicates`.
+- `heritage.ts`: `GET /:id/enrichment` now annotates each proposal with `review{status,reviewedAt}`, hides `REJECTED` records, adds `meta.reviewCounts`; `GET /:id` exposes `authority_tier`, `tier_label`, `license`, `verified_date`.
+- Frontend: `ExternalReferences.tsx` review badges (Verified / Conflict / Proposal) + “· Open Dataset” header; detail page source-tier badge with Verified/Terms lines; admin gains a ninth **“Data Review”** tab (queue + status filter, verify/reject/reopen with admin-only note, entity-UUID extraction tool, read-only duplicate scan).
+
+### Honesty rules enforced end-to-end (Steps 16–17 verified live)
+- Conflicts render **`CONFLICT — REQUIRES REVIEW`**, missing data **`INFORMATION UNAVAILABLE`**, Astrova-computed values **`ASTROVA ESTIMATE`**, live environment values **`LIVE DATA`**, source-verified values **`VERIFIED`**.
+- Pipeline **never overwrites curated entity fields** — approval stores a reference-only `VERIFIED` record; duplicates report **`POSSIBLE DUPLICATE`** only (never auto-merge); rejected proposals disappear from public responses while verified ones render with `reviewedAt`.
+- Live E2E: `verify → reject` is refused (`INVALID_TRANSITION — Cannot move from VERIFIED to REJECTED`); the explicit `reopen` action is required first. Reviewer notes and e-mails never reach a public response (asserted in tests).
+
+### Timeline judgment (Step 18 — documented, not guessed)
+- Timeline unchanged at **9 periods / 52 assigned entities**; **44 of 96 entities have no period** (including all 22 Phase-36 records).
+- **Decision: no new period assignments.** Period ranges overlap (a stated 1591 for Charminar falls inside both `Ahom 1228–1826` and `Colonial 1573–1947`), so a source-supported assignment cannot be made deterministically, and most new records are living traditions/festivals/natural sites with no single founding date. Assigning anyway would fabricate provenance.
+
+### Verification (Steps 19–27)
+- **Visitor intelligence regression:** `deepavali` → `availability: location_unavailable` + `situation.status: information_unavailable`; `charminar` → full weather/AQI/recommendation payload.
+- **Open-data rule:** only Open-Meteo, Wikidata, OpenStreetMap/Overpass/Nominatim, unpkg and an airnow.gov documentation link appear in source; **no proprietary API, no provider key, no client-side secret**; AI chatbot page still **Under Construction**; future-list items not implemented.
+- **Security:** every query parameterized (the single `${column}` interpolation is a hard-coded whitelist), admin endpoints 401 without session / 403 for a non-admin session (re-verified after demoting the QA account), rate limits intact (public enrichment limited; admin refresh bounded to one entity/5 s), no secrets in the diff.
+- **Performance (5 samples/endpoint):** heritage list 242 ms, detail 238 ms, enrichment 160 ms, timeline 99 ms, search 85 ms, VI 82 ms, nearby 82 ms, sources 82 ms.
+- **Tests:** db-audit **41/41**, data-quality **12/12**, enrichment **4/4**, enrichment-review **14/14**, visit-module **16/16**, visitor-intelligence **10/10** = **97 checks green**; migrations 32/32; backend `tsc --noEmit` + build clean; frontend `tsc --noEmit` clean. `test-media-upload.js` still fails on the pre-existing missing `form-data` dependency (not caused by this phase).
+- **Regression:** all 13 routes 200 (`/`, `/explore`, `/explore/[id]`, `/heritage`, `/heritage/[id]`, `/timeline`, `/collections`, `/collections/[slug]`, `/auth`, `/favorites`, `/admin`, `/about`, `/ai`) + search/suggestions/media/locations/sources/periods/state-counts APIs 200.
+- **Responsive (real viewport resize):** `/` at all 10 widths (1440/1280/1024/900/768/740/720/430/390/360), `/heritage/charminar` at 7 widths, `/admin` → Data Review at 1440/768/360 — `scrollWidth === clientWidth` everywhere (0 px page overflow).
+- **Accessibility:** `lang=en`, exactly 1 h1, main/nav/banner landmarks, 0 images without alt, 0 unlabeled inputs, 0 unnamed controls on home + detail + admin-review (the single flagged anchor is the logo link named by its `alt="Astrova"` image).
+- **Production builds:** backend `tsc` exit 0; `next build` 13/13 pages prerendered (dev server still serving 200 afterwards).
+
+### Test-account hygiene (Step 27)
+- Temporary QA admin `p36-qa-tester@astrova.in` demoted back to `role='user'`; `admin@astrova.in` untouched and now the only admin. The stale session was then probed: admin endpoints return **403** (role checked per request) and **401** with no session.
+
+### Known limitations
+- Feature H remains **PARTIAL**: proposals are persisted and human-reviewed, but unattended approval into curated fields is still PLANNED.
+- 44/96 entities have no historical period (see the timeline judgment above).
+- `test-media-upload.js` fails for a pre-existing missing `form-data` dependency in `backend/package.json`.
+- Original `admin@astrova.in` password is unknown/undocumented, so that specific login was not exercised.

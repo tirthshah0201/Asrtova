@@ -10,7 +10,7 @@ import {
   Shield, RefreshCw, Eye, Search, ChevronRight, ExternalLink,
   AlertCircle, CheckCircle, Plus, Trash2, Edit3, Save, X,
   Video, FileText, Headphones, Globe, Database, Heart,
-  ChevronLeft, MapPin, Calendar, Layers, AlertTriangle,
+  ChevronLeft, MapPin, Calendar, Layers, AlertTriangle, ShieldCheck,
 } from "lucide-react";
 import { api } from "@/services/api";
 import { useAuth } from "@/hooks/useAuth";
@@ -120,7 +120,7 @@ interface PeriodItem {
   heritage_count: number;
 }
 
-type AdminTab = "overview" | "heritage" | "media" | "locations" | "sources" | "users" | "collections" | "periods";
+type AdminTab = "overview" | "heritage" | "media" | "locations" | "sources" | "users" | "collections" | "periods" | "review";
 
 /* ========================================
    Auth Gate
@@ -1161,6 +1161,369 @@ function LocationsTab({ showToast }: { showToast: (msg: string, type: "success" 
    Sources Tab
    ======================================== */
 
+/* ========================================
+   Data Review Tab (Phase 36 — controlled enrichment workflow)
+
+   Lists persisted enrichment proposals, lets admins verify/reject/
+   reopen with a note, trigger an admin-boundary refresh for one
+   entity, and run a read-only POSSIBLE DUPLICATE scan.
+   Approval is reference-only — curated heritage data is untouched.
+   ======================================== */
+
+interface EnrichmentProposal {
+  id: string;
+  entity_id: string;
+  entity_name: string;
+  entity_slug: string | null;
+  external_id: string;
+  field: string;
+  proposed_value: string;
+  current_value: string | null;
+  source_name: string;
+  source_url: string | null;
+  license: string | null;
+  conflicts: Array<{ type: string; detail: string }>;
+  status: "DRAFT" | "PENDING_REVIEW" | "VERIFIED" | "REJECTED" | "CONFLICT";
+  reviewer_note: string | null;
+  retrieved_at: string;
+  reviewed_at: string | null;
+}
+
+interface DuplicatePair {
+  a: { id: string; name: string; slug: string | null };
+  b: { id: string; name: string; slug: string | null };
+  score: number;
+  reasons: string[];
+}
+
+const PROPOSAL_STATUS_STYLES: Record<EnrichmentProposal["status"], string> = {
+  PENDING_REVIEW: "bg-stone-100 text-stone-600",
+  CONFLICT: "bg-amber-100 text-amber-700",
+  VERIFIED: "bg-green-100 text-green-700",
+  REJECTED: "bg-red-100 text-red-600",
+  DRAFT: "bg-blue-50 text-blue-700",
+};
+
+const PROPOSAL_STATUS_LABELS: Record<EnrichmentProposal["status"], string> = {
+  PENDING_REVIEW: "Pending review",
+  CONFLICT: "Conflict — requires review",
+  VERIFIED: "Verified",
+  REJECTED: "Rejected",
+  DRAFT: "Draft",
+};
+
+function ReviewTab({ showToast }: { showToast: (msg: string, type: "success" | "error") => void }) {
+  const [proposals, setProposals] = useState<EnrichmentProposal[]>([]);
+  const [total, setTotal] = useState(0);
+  const [statusFilter, setStatusFilter] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [noteFor, setNoteFor] = useState<string | null>(null);
+  const [noteText, setNoteText] = useState("");
+  const [duplicates, setDuplicates] = useState<DuplicatePair[] | null>(null);
+  const [dupScanned, setDupScanned] = useState(0);
+  const [scanning, setScanning] = useState(false);
+  const [refreshEntity, setRefreshEntity] = useState("");
+  const [refreshing, setRefreshing] = useState(false);
+
+  const fetchProposals = useCallback(async () => {
+    setLoading(true);
+    try {
+      const qs = statusFilter ? `?status=${encodeURIComponent(statusFilter)}` : "";
+      const res = await api.requestWithHeaders<{
+        success: boolean;
+        data?: { proposals: EnrichmentProposal[]; total: number };
+      }>(`/admin/enrichment/proposals${qs}`, "GET");
+      if (res.success && res.data) {
+        setProposals(res.data.proposals);
+        setTotal(res.data.total);
+      }
+    } catch { /* session handled globally */ } finally { setLoading(false); }
+  }, [statusFilter]);
+
+  // eslint-disable-next-line react-hooks/set-state-in-effect -- fetch after await
+  useEffect(() => { fetchProposals(); }, [fetchProposals]);
+
+  const handleReview = async (id: string, action: "verify" | "reject" | "reopen") => {
+    try {
+      const res = await api.requestWithHeaders<{ success: boolean; error?: { message?: string } }>(
+        `/admin/enrichment/proposals/${id}/review`,
+        "POST",
+        {},
+        { action, note: noteFor === id ? noteText : undefined }
+      );
+      if (res.success) {
+        showToast(`Proposal ${action === "verify" ? "verified" : action === "reject" ? "rejected" : "reopened"}`, "success");
+        setNoteFor(null);
+        setNoteText("");
+        fetchProposals();
+      } else {
+        showToast(res.error?.message || "Review action failed", "error");
+      }
+    } catch { showToast("Request failed", "error"); }
+  };
+
+  const handleRefresh = async () => {
+    const id = refreshEntity.trim();
+    if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)) {
+      showToast("Enter a valid heritage UUID", "error");
+      return;
+    }
+    setRefreshing(true);
+    try {
+      const res = await api.requestWithHeaders<{
+        success: boolean;
+        data?: { enrichment_status: string; inserted: number; refreshed: number; skipped: number };
+        error?: { message?: string };
+      }>(`/admin/enrichment/refresh/${id}`, "POST", {});
+      if (res.success && res.data) {
+        showToast(
+          `Refresh: ${res.data.enrichment_status} — ${res.data.inserted} new, ${res.data.refreshed} refreshed, ${res.data.skipped} kept`,
+          "success"
+        );
+        fetchProposals();
+      } else {
+        showToast(res.error?.message || "Refresh failed", "error");
+      }
+    } catch { showToast("Request failed", "error"); } finally { setRefreshing(false); }
+  };
+
+  const handleScan = async () => {
+    setScanning(true);
+    try {
+      const res = await api.requestWithHeaders<{
+        success: boolean;
+        data?: { pairs: DuplicatePair[]; scanned: number };
+      }>("/admin/enrichment/duplicates", "GET");
+      if (res.success && res.data) {
+        setDuplicates(res.data.pairs);
+        setDupScanned(res.data.scanned);
+        showToast(
+          res.data.pairs.length === 0
+            ? `No possible duplicates in ${res.data.scanned} records`
+            : `${res.data.pairs.length} possible duplicate flag(s)`,
+          "success"
+        );
+      }
+    } catch { showToast("Scan failed", "error"); } finally { setScanning(false); }
+  };
+
+  return (
+    <div>
+      <div className="mb-6 rounded-xl border border-border bg-card p-5">
+        <h2 className="font-semibold text-charcoal mb-1">Enrichment review queue</h2>
+        <p className="text-sm text-muted mb-4">
+          External proposals are validated, duplicate- and conflict-checked, then held for
+          review. Verifying a proposal records a verified reference with provenance — it never
+          overwrites curated heritage data.
+        </p>
+        <div className="flex flex-wrap gap-2 items-center">
+          <label htmlFor="review-status-filter" className="sr-only">Filter by status</label>
+          <select
+            id="review-status-filter"
+            value={statusFilter}
+            onChange={(e) => setStatusFilter(e.target.value)}
+            className="rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal outline-none focus:border-terracotta focus:ring-1 focus:ring-terracotta/30"
+          >
+            <option value="">All statuses</option>
+            <option value="PENDING_REVIEW">Pending review</option>
+            <option value="CONFLICT">Conflict — requires review</option>
+            <option value="VERIFIED">Verified</option>
+            <option value="REJECTED">Rejected</option>
+          </select>
+          <button
+            type="button"
+            onClick={fetchProposals}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border text-sm text-charcoal hover:bg-cream/40"
+          >
+            <RefreshCw className="h-4 w-4" /> Refresh list
+          </button>
+          <span className="text-xs text-muted">{total} proposal(s)</span>
+        </div>
+      </div>
+
+      {/* Admin-triggered external refresh — one entity, bounded */}
+      <div className="mb-6 rounded-xl border border-border bg-card p-5">
+        <h2 className="font-semibold text-charcoal mb-1">Extract proposals for one entity</h2>
+        <p className="text-sm text-muted mb-3">
+          Runs the controlled extraction pipeline (validation → duplicate → conflict →
+          provenance) for a single heritage UUID. Existing review decisions are preserved.
+        </p>
+        <div className="flex flex-wrap gap-2">
+          <label htmlFor="refresh-entity-id" className="sr-only">Heritage entity UUID</label>
+          <input
+            id="refresh-entity-id"
+            type="text"
+            value={refreshEntity}
+            onChange={(e) => setRefreshEntity(e.target.value)}
+            placeholder="Heritage entity UUID"
+            className="flex-1 min-w-[240px] rounded-lg border border-border bg-white px-3 py-2 text-sm text-charcoal placeholder:text-warm-gray outline-none focus:border-terracotta focus:ring-1 focus:ring-terracotta/30 font-mono"
+          />
+          <button
+            type="button"
+            onClick={handleRefresh}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg bg-terracotta text-white text-sm font-medium hover:bg-terracotta-dark disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+            {refreshing ? "Extracting..." : "Extract"}
+          </button>
+        </div>
+      </div>
+
+      {/* Proposal list */}
+      <div className="mb-6 rounded-xl border border-border bg-card">
+        <div className="px-5 py-4 border-b border-border">
+          <h2 className="font-semibold text-charcoal">Proposals</h2>
+        </div>
+        {loading ? (
+          <div className="px-5 py-8 text-sm text-muted" role="status">Loading proposals...</div>
+        ) : proposals.length === 0 ? (
+          <div className="px-5 py-8 text-sm text-muted">
+            No proposals yet. Use the extraction tool above to pull external references for a
+            heritage entity.
+          </div>
+        ) : (
+          <ul className="divide-y divide-border">
+            {proposals.map((p) => (
+              <li key={p.id} className="px-5 py-4">
+                <div className="flex flex-wrap items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-2 mb-1">
+                      <span className="font-medium text-charcoal text-sm">{p.entity_name}</span>
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wider ${PROPOSAL_STATUS_STYLES[p.status]}`}>
+                        {PROPOSAL_STATUS_LABELS[p.status]}
+                      </span>
+                      <span className="text-xs text-muted">{p.field}</span>
+                    </div>
+                    <p className="text-sm text-charcoal break-words">
+                      <span className="text-muted">Proposed:</span> {p.proposed_value}
+                    </p>
+                    {p.current_value && (
+                      <p className="text-sm text-muted break-words">
+                        Current Astrova value: {p.current_value}
+                      </p>
+                    )}
+                    <p className="text-xs text-muted mt-1">
+                      Source: {p.source_name}
+                      {p.license ? ` · ${p.license}` : ""} · {p.external_id}
+                      {p.reviewed_at ? ` · reviewed ${new Date(p.reviewed_at).toLocaleDateString("en-IN")}` : ""}
+                    </p>
+                    {p.conflicts.length > 0 && (
+                      <div className="mt-2 rounded-lg border border-amber-200 bg-amber-50 p-2">
+                        {p.conflicts.map((c) => (
+                          <p key={c.detail} className="text-xs text-amber-800">{c.detail}</p>
+                        ))}
+                      </div>
+                    )}
+                    {p.reviewer_note && (
+                      <p className="text-xs text-muted mt-1 italic">Review note: {p.reviewer_note}</p>
+                    )}
+                  </div>
+                  <div className="flex flex-col gap-2 shrink-0">
+                    {p.status !== "VERIFIED" && p.status !== "REJECTED" && (
+                      <button
+                        type="button"
+                        onClick={() => handleReview(p.id, "verify")}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-green-600 text-white text-xs font-medium hover:bg-green-700"
+                      >
+                        <CheckCircle className="h-3.5 w-3.5" /> Verify
+                      </button>
+                    )}
+                    {p.status !== "REJECTED" && p.status !== "VERIFIED" && (
+                      <button
+                        type="button"
+                        onClick={() => handleReview(p.id, "reject")}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-red-200 text-red-600 text-xs font-medium hover:bg-red-50"
+                      >
+                        <X className="h-3.5 w-3.5" /> Reject
+                      </button>
+                    )}
+                    {(p.status === "VERIFIED" || p.status === "REJECTED") && (
+                      <button
+                        type="button"
+                        onClick={() => handleReview(p.id, "reopen")}
+                        className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-charcoal text-xs font-medium hover:bg-cream/40"
+                      >
+                        <RefreshCw className="h-3.5 w-3.5" /> Reopen
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={() => { setNoteFor(noteFor === p.id ? null : p.id); setNoteText(""); }}
+                      className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg border border-border text-xs text-muted hover:bg-cream/40"
+                      aria-expanded={noteFor === p.id}
+                    >
+                      <Edit3 className="h-3.5 w-3.5" /> Note
+                    </button>
+                  </div>
+                </div>
+                {noteFor === p.id && (
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <label htmlFor={`note-${p.id}`} className="sr-only">Review note</label>
+                    <input
+                      id={`note-${p.id}`}
+                      type="text"
+                      value={noteText}
+                      onChange={(e) => setNoteText(e.target.value)}
+                      placeholder="Reviewer note (admin-only, never public)"
+                      maxLength={1000}
+                      className="flex-1 min-w-[200px] rounded-lg border border-border bg-white px-3 py-1.5 text-sm text-charcoal placeholder:text-warm-gray outline-none focus:border-terracotta focus:ring-1 focus:ring-terracotta/30"
+                    />
+                  </div>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Read-only duplicate scan */}
+      <div className="rounded-xl border border-border bg-card p-5">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-2">
+          <div>
+            <h2 className="font-semibold text-charcoal">Duplicate detection</h2>
+            <p className="text-sm text-muted">
+              Read-only scan — flags POSSIBLE DUPLICATE pairs for human review. Nothing is
+              merged or deleted.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={handleScan}
+            disabled={scanning}
+            className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-border text-sm text-charcoal hover:bg-cream/40 disabled:opacity-50"
+          >
+            <Search className="h-4 w-4" /> {scanning ? "Scanning..." : "Run scan"}
+          </button>
+        </div>
+        {duplicates && (
+          <div className="mt-3">
+            {duplicates.length === 0 ? (
+              <p className="text-sm text-green-700" role="status">
+                No possible duplicates found across {dupScanned} records.
+              </p>
+            ) : (
+              <ul className="space-y-2">
+                {duplicates.map((pair) => (
+                  <li key={`${pair.a.id}-${pair.b.id}`} className="rounded-lg border border-amber-200 bg-amber-50 p-3">
+                    <p className="text-sm font-medium text-amber-800">
+                      POSSIBLE DUPLICATE — {Math.round(pair.score * 100)}% match
+                    </p>
+                    <p className="text-sm text-amber-900">
+                      {pair.a.name} ↔ {pair.b.name}
+                    </p>
+                    <p className="text-xs text-amber-700">{pair.reasons.join(" · ")}</p>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SourcesTab({ showToast }: { showToast: (msg: string, type: "success" | "error") => void }) {
   const [sources, setSources] = useState<SourceItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -1912,6 +2275,7 @@ export default function AdminPage() {
     { key: "media", label: "Media", icon: Image },
     { key: "locations", label: "Locations", icon: MapPin },
     { key: "sources", label: "Sources", icon: BookOpen },
+    { key: "review", label: "Data Review", icon: ShieldCheck },
     { key: "users", label: "Users", icon: Users },
     { key: "collections", label: "Collections", icon: Layers },
     { key: "periods", label: "Periods", icon: Clock },
@@ -2080,6 +2444,7 @@ export default function AdminPage() {
               {activeTab === "media" && <MediaTab showToast={showToast} />}
               {activeTab === "locations" && <LocationsTab showToast={showToast} />}
               {activeTab === "sources" && <SourcesTab showToast={showToast} />}
+              {activeTab === "review" && <ReviewTab showToast={showToast} />}
               {activeTab === "users" && <UsersTab showToast={showToast} />}
               {activeTab === "collections" && <CollectionsTab showToast={showToast} />}
               {activeTab === "periods" && <PeriodsTab showToast={showToast} />}

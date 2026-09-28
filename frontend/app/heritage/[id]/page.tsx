@@ -57,6 +57,10 @@ interface HeritageEntity {
     verification_status: string;
     publication_date: string | null;
     retrieved_date: string | null;
+    authority_tier: number | null;
+    tier_label: string;
+    license: string | null;
+    verified_date: string | null;
   } | null;
   period?: {
     id: string;
@@ -473,6 +477,22 @@ export default function HeritageDetailPage({
                           <Badge variant="secondary" className="text-xs">
                             {heritage.source.source_type}
                           </Badge>
+                          {heritage.source.tier_label && (
+                            <Badge
+                              variant="secondary"
+                              className={`text-xs ${
+                                heritage.source.authority_tier === 1
+                                  ? "bg-green-100 text-green-700"
+                                  : heritage.source.authority_tier === 5
+                                  ? "bg-stone-100 text-stone-600"
+                                  : "bg-blue-50 text-blue-700"
+                              }`}
+                            >
+                              {heritage.source.tier_label === "OFFICIAL"
+                                ? "Official source"
+                                : heritage.source.tier_label}
+                            </Badge>
+                          )}
                           {heritage.source.verification_status ? (
                             <Badge
                               variant="secondary"
@@ -501,6 +521,12 @@ export default function HeritageDetailPage({
                           )}
                           {heritage.source.retrieved_date && (
                             <p>Retrieved: {heritage.source.retrieved_date}</p>
+                          )}
+                          {heritage.source.verified_date && (
+                            <p>Verified: {heritage.source.verified_date}</p>
+                          )}
+                          {heritage.source.license && (
+                            <p>Terms: {heritage.source.license}</p>
                           )}
                         </div>
                         {heritage.source.url && (
