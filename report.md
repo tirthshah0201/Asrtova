@@ -1,5 +1,70 @@
 # Astrova — Project Report
 
+## Phase 38 — RAG Generation, Multilingual Knowledge Expansion & Trusted Heritage Hours (2026-09-29)
+
+Status: **COMPLETE** — executed against checkpoint `d1bb866` (not amended). Four controlled improvements shipped on the Phase 37 RAG foundation: a real LLM generation runtime, multilingual knowledge expansion with preserved provenance, trusted operating-hours expansion, and a provenance-aware conflict review of Amber Fort / Red Fort (plus a newly discovered Qutub Minar conflict).
+
+### Files changed
+- **New migrations (2):** `database/migrations/035_p38_multilingual_knowledge.sql` (chatbot_knowledge.translated_from FK + provenance-inheriting translated rows), `database/migrations/036_p38_operating_hours_expansion.sql` (hours research + conflict-review outcomes) — both applied, migrations now **36/36**.
+- **Modified backend services:** `rag/generate.ts` (model verification, grounding check, citation + provenance validation, no-invented-hours check, output safety, latency metrics), `rag/prompt.ts` (source-grounded system prompt: subject consistency, provenance-label retention, citation rules), `rag/retrieve.ts` (same-script lexical gate protecting cross-language fallback), `rag/knowledge.ts` (derived operating-hours chunks with stale-row cleanup), `operatingHours.ts` (effective-date override preference).
+- **Modified backend routes:** `routes/admin.ts` (`GET /api/admin/rag/status` extended with generation status/metrics, hours coverage, unresolved reviews, language counts).
+- **Modified frontend:** `components/heritage/LiveVisitorIntelligence.tsx` (conflict wording, VERIFIED source line), `app/admin/page.tsx` (Data Ops Generation panel + coverage/review panels — same tab, no new section).
+- **New tests (2):** `backend/tests/test-generation.js` (22 checks), `backend/tests/test-hours-coverage.js` (20 checks); `test-rag.js` extended +3 (35 total) for Parts L/M.
+- **Docs:** `PRD.md`, `report.md`, `docs/ASTROVA-PHASE-38-RAG-GENERATION-DATA-COVERAGE.md` (+ `.docx` via new `generate-p38-docx.py`).
+
+### LLM runtime
+- Audit first: no Ollama, no :11434, `LLM_API_KEY`/`LLM_BASE_URL` empty. Installed **Ollama 0.34.4 + qwen2.5:1.5b (986 MB)** with model cache on `H:\ollama-models` (C: was 97% full) after documenting model+size and getting approval. RTX 4060 CUDA; cold load ~43 s; warm generation verified with real tokens.
+- **Real generation verified through the full pipeline** (`generation.backend: "ollama"`, validated citation). Extractive fallback remains functional.
+- Production path is env-switchable: `LLM_API_KEY`/`LLM_BASE_URL`/`LLM_MODEL` selects an OpenAI-compatible endpoint with no code change.
+
+### Generation & citation validation
+- Prompt: retrieved context is DATA not instructions; answer only from context; INFORMATION UNAVAILABLE contract; subject-consistency; provenance labels preserved; `[n]` citations mandatory.
+- Guards before/after generation: injection screen (question + every candidate sentence), pre-generation grounding check (≥2 significant question terms absent from context → no-answer without calling the model), `[n]` marker validation against retrieved blocks, sources re-resolved from the retrieval set, CONFLICT/DEMO/ESTIMATE label retention, every clock time must exist verbatim in context, output safety (credentials/instruction-override/control chars) — one stricter regeneration then extractive fallback. Invalid citations cannot reach the public API.
+
+### Multilingual coverage (one shared vector KB)
+- `translated_from` FK + single-join inheritance: translated rows carry the original's source/tier/licence/verification — translations never create a new official source.
+- Chunks **207 → 282** (97 VERIFIED, all embedded): en 182, **hi 26, gu 22, mr 18, ta 18, pa 16**. Zero provenance mismatches.
+- Same-script lexical gate added so loosely-related Indic chunks can't block honest language fallback.
+
+### Heritage hours
+- **Previous:** 4/96 entities (28 rows). **Now:** **7/96** (57 rows): **3 VERIFIED** (Red Fort, Victoria Memorial Kolkata, Ajanta), **2 CONFLICT** (Amber retained, Qutub Minar newly recorded), **1 DEMO** (Hawa Mahal), **1 ASTROVA_ESTIMATE** (Ellora); 89 missing → INFORMATION UNAVAILABLE.
+- Every new row researched live against its recorded `source_url`; policy documented in migration 036 header; no blogs, no Google Maps.
+- Effective-date override preference makes dated rows deterministically beat undated weekly defaults (Red Fort Monday history + annual 15 Jul–15 Aug closure).
+- Hours summaries are derived RAG chunks so chat answers hours questions with stored provenance labels.
+
+### Conflict resolution
+- **Red Fort — RESOLVED to VERIFIED:** ASI order 2026-02-13 (signed by the DG ASI) opens all seven days from 2026-02-16; stale Monday-closure listings predate it; 09:30–16:30; dated historical Monday-closure row kept; annual closure dated override. Evidence URL recorded (Economic Times/PTI + Times of India).
+- **Amber Fort — CONFLICT RETAINED:** Rajasthan Tourism's own booking portal changed from 07:00–20:00 (P37) to 08:00–21:00 (live), day-visit listings say 08:00–17:30, the destination page publishes no timings, and 21:00 may be the light-and-sound show — no source establishes authority. Full review note stored in `special_note`; nothing auto-chosen.
+- **Qutub Minar — CONFLICT discovered:** ASI "Sunrise to 08:00pm" vs Incredible India "Sunrise to sunset" (both Tier-1). Recorded, not resolved.
+
+### APIs (exact endpoints changed)
+- `POST /api/ai/chat` — now Ollama generation with validation; response shape unchanged (`generation.backend/model/status/elapsedMs`).
+- `GET /api/admin/rag/status` — extended: `generation{backend,model,status,active,reason,metrics}`, `hours{covered,verified,conflict,demo,estimate,missing,rows}`, `reviews{pending,conflict,unresolved}`, `chunks.languages`.
+- Heritage detail / VI situation — same endpoints; conflict/verified/missing wording improved client-side.
+
+### Tests (exact counts)
+**231 checks green across 11 suites** (Phase 37 baseline: 186 across 9): db-audit 47 · data-quality 12 · enrichment 4 · enrichment-review 14 · visit-module 16 · visitor-intelligence 10 · operating-hours 34 · demo-data 17 · RAG 35 · **generation 22 (new)** · **hours-coverage 20 (new)**. Migrations 36/36. `test-media-upload.js` still fails on the pre-existing missing `form-data` dependency (unchanged from Phase 37).
+
+### Build
+Backend `npx tsc --noEmit` exit 0 and `npx tsc` exit 0. Frontend `npx tsc --noEmit` exit 0 and `next build` completed (full route table printed).
+
+### Performance (measured vs Phase 37)
+RAG p50 **814 ms (en) / 1057 ms (hi)** vs 503/841 in P37 — higher by design: a real **279–476 ms** LLM generation is now included (admin-reported live p50 854 ms). Heritage detail 346 ms (was 247). Retrieval path unchanged (pgvector cosine, minScore 0.8). Situation compute unchanged (sub-ms) with the added effective-date preference. No improvement claimed where none was measured.
+
+### Verification highlights
+- Responsive `scrollWidth === clientWidth` PASS: `/ai` at 1440/1280/1024/900/768/740/720/430/390/360; `/heritage/qutub-minar` 360/768/1440; `/admin` Data Ops 360/768/1440.
+- Accessibility: `/ai` 1 h1, `lang=en`, header/nav/main/footer landmarks, 0 unlabelled inputs, 0 unnamed buttons, 0 missing alt; global `:focus-visible` outline rule present; Tab navigation reaches controls.
+- Security: all P37 controls preserved; new tests for malicious LLM output, spoofed/out-of-range citations, source spoofing, injection in retrieved/multilingual/Hindi content, provenance-label dropping, invented clock times.
+- QA test account demoted back to `user`; only `admin@astrova.in` is admin.
+
+### Known limitations
+- qwen2.5:1.5b is small — some answers trigger the stricter-regeneration/fallback path; larger model needs disk/VRAM budget.
+- Ollama is a single-host local dependency (documented; env-switchable to hosted endpoints).
+- Hours 7/96; Amber + Qutub remain CONFLICT by evidence; Hawa Mahal remains DEMO pending review; Ellora remains ESTIMATE.
+- `test-media-upload.js` pre-existing failure (`form-data`).
+
+---
+
 ## Phase 37 — Heritage Situation, Operating Hours, Controlled Demo Nearby Data & RAG Chatbot (2026-09-29)
 
 Status: **COMPLETE** — executed against checkpoint `2358a94` (not amended). Four connected parts shipped: structured operating hours, a timezone-correct current-situation engine, a controlled DEMO nearby dataset, and a real retrieval-augmented chatbot that replaced the Under Construction state.

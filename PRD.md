@@ -738,6 +738,55 @@ BE tsc+build, FE tsc, ESLint 0 errors, FE build 13/13; tests 10/10 + 4/4 + 16/16
 
 ---
 
+## Phase 38 — RAG Generation, Multilingual Knowledge Expansion & Trusted Heritage Hours (2026-09-29)
+
+### Status: COMPLETE — four controlled improvements shipped against checkpoint `d1bb866`; chatbot answers are now abstractive LLM generation with validated citations
+
+### LLM runtime (Parts C–E)
+- **Environment audit first**: no Ollama executable, port 11434 unreachable, `LLM_API_KEY`/`LLM_BASE_URL`/`OLLAMA_MODEL` all empty — no LLM existed. C: was 97% full (7.1 GB), so the cache was directed to H: after explicit approval.
+- **Ollama 0.34.4 + `qwen2.5:1.5b` (986 MB, documented before install)**, model cache `H:\ollama-models`, RTX 4060 CUDA. Warm generation verified with real tokens (422 ms/8 tokens direct, 901 ms multilingual); cold model load ~43 s once.
+- **Real generation verified through the full RAG pipeline**: `POST /api/ai/chat` returns `generation.backend: "ollama"`, `model: "qwen2.5:1.5b"`, validated `[1]` citation. Adapter order (Ollama → OpenAI-compatible → extractive composer) unchanged; extractive fallback remains functional and is used whenever validation fails.
+
+### Generation contract & citation validation (Parts F–H)
+- Retrieved context stays **DATA, not instructions**; Phase 37 injection boundary preserved (screening on question and every candidate sentence, fenced context).
+- **Grounding check before generation**: ≥2 significant question terms missing from every retrieved chunk → `INFORMATION UNAVAILABLE` without calling the model (kills entity confabulation).
+- **Post-generation validation**: `[n]` markers checked against retrieved blocks (spoofed/out-of-range removed); all-invalid → extractive fallback; cited sources re-resolved from the retrieval set; **provenance validation** (CONFLICT/DEMO/ESTIMATE labels must survive into the wording); **no-invented-hours** (every clock time must appear verbatim in a retrieved chunk); output safety (control chars, credential-like text, instruction-override text rejected). One stricter regeneration, then fallback — unsupported claims never reach the API.
+
+### Multilingual expansion (Parts J–M)
+- **Migration `035_p38_multilingual_knowledge.sql`**: `chatbot_knowledge.translated_from` UUID FK records the original-source relationship in schema; every translated row inherits entity/location/source/tier/licence/verification from the ORIGINAL English row via one join — a translation can never upgrade provenance or invent a source. Idempotent.
+- Chunks **207 → 282** (all embedded, 97 VERIFIED): en 175→**182**, hi 8→**26**, gu 7→**22**, mr 6→**18**, ta 6→**18**, pa 5→**16**. Zero provenance mismatches verified by join.
+- Same-script lexical gating added to retrieval so loosely-related Indic chunks can't block honest cross-language fallback. All six languages test own-language sources; Hindi→English fallback returns `languageFallback: true` with source language visible; Romanized Gujarati (`Rani ki Vav kyare banavyu hatu?`) answers from provenance-bearing sources.
+
+### Trusted operating hours (Parts N–P)
+- **Migration `036_p38_operating_hours_expansion.sql`** — every row researched live 2026-09-29 against its recorded `source_url`; review policy documented in the migration header. Coverage **4 → 7 of 96 entities** (57 rows; 89 correctly INFORMATION UNAVAILABLE).
+- **Red Fort CONFLICT RESOLVED → VERIFIED**: ASI order 2026-02-13 signed by the DG ASI opens the fort all seven days from 2026-02-16 (PTI/Economic Times evidence recorded); Monday-closure listings are stale; 09:30–16:30 weekly + dated historical Monday-closure row (until 2026-02-15) + dated annual 15 Jul–15 Aug closure.
+- **Amber Fort CONFLICT RETAINED** after review: the Rajasthan Tourism booking portal itself changed (07:00–20:00 → 08:00–21:00 live), day-visit listings say 08:00–17:30, the destination page publishes no timings, and 21:00 may cover only the light-and-sound show — no source establishes authority, so nothing is chosen. Full review note stored in `special_note`.
+- **Qutub Minar CONFLICT discovered** during research: ASI world-heritage page “Sunrise to 08:00pm” vs Incredible India “Sunrise to sunset” — two Tier-1 sources disagree; recorded, not resolved.
+- New VERIFIED: Victoria Memorial Kolkata (10:00–18:00, closed Mondays, own site), Ajanta Caves (09:00–17:00, closed Mondays, ASI). Ellora = ASTROVA_ESTIMATE (sunrise–sunset can't be clock times). Hawa Mahal DEMO retained with documented decision.
+- `operatingHours.ts` gained **effective-date override preference**: dated rows deterministically win over undated weekly defaults (powers Red Fort history + annual closure).
+- Operating-hours summaries are now **derived RAG chunks** (one per entity, rebuilt and stale-cleaned on every ingest) so chat answers hours questions with stored provenance labels.
+
+### Admin & Visitor Intelligence (Parts R–S)
+- Current Situation now shows conflict wording (“Hours in conflict — requires review · Sources disagree…”) and VERIFIED source lines; missing stays INFORMATION UNAVAILABLE — never a guessed state.
+- Data Ops tab extended (same tab, no new section): **Generation** panel — `Backend: Ollama · Qwen2.5:1.5b · Status: ACTIVE · p50 854 ms` with reachability reason and fallback status; hours coverage 7/96 with verified/conflict/demo/estimate split; unresolved review count; 6-language chunk counts; generation latency metrics from real traffic.
+
+### Verification
+- **Tests 231 green across 11 suites** (P37 baseline 186/9): db-audit 47, data-quality 12, enrichment 4, enrichment-review 14, visit-module 16, visitor-intelligence 10, operating-hours 34, demo-data 17, **RAG 35** (was 32), **generation 22 (new)**, **hours-coverage 20 (new)**. Migrations **36/36**.
+- Security tests: malicious LLM output, spoofed/invalid citations, source spoofing, injection in retrieved and multilingual/Hindi content, provenance-label dropping, invented clock times.
+- Backend `tsc --noEmit` + `tsc` exit 0; frontend `tsc --noEmit` exit 0 + `next build` completed (route table printed).
+- Responsive `scrollWidth === clientWidth` PASS: `/ai` at 1440/1280/1024/900/768/740/720/430/390/360; `/heritage/qutub-minar` at 360/768/1440; `/admin` Data Ops at 360/768/1440.
+- Accessibility: `/ai` 1 h1, `lang=en`, landmarks header/nav/main/footer, 0 unlabelled inputs, 0 unnamed buttons, 0 missing alt; global `:focus-visible` outline rule present; Tab navigation works (live `:focus-visible` matching requires window OS focus, an automation limitation).
+- Performance (measured): RAG p50 **814 ms en / 1057 ms hi** (P37: 503/841) — higher by design since a real 279–476 ms LLM generation is now included; admin-reported generation p50 854 ms; heritage detail 346 ms; retrieval path unchanged.
+
+### Known limitations
+- qwen2.5:1.5b is small: occasionally triggers stricter-regeneration/fallback; a larger model needs disk/VRAM budget.
+- Ollama is a single-host dependency; production can switch to any OpenAI-compatible endpoint via env vars with no code change.
+- Hours coverage 7/96 — the other 89 honestly report INFORMATION UNAVAILABLE.
+- Amber Fort and Qutub Minar remain CONFLICT **by evidence**; Hawa Mahal stays DEMO pending its next review cycle; Ellora stays ESTIMATE.
+- `test-media-upload.js` still fails on the pre-existing missing `form-data` dependency.
+
+---
+
 ## Phase 37 — Heritage Situation, Operating Hours, Controlled Demo Nearby Data & RAG Chatbot (2026-09-29)
 
 ### Status: COMPLETE — 4-part capability shipped against checkpoint `2358a94`; AI chatbot moved from Under Construction to a live, source-cited RAG assistant

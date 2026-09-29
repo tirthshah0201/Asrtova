@@ -346,6 +346,135 @@ export async function buildDrafts(): Promise<ChunkDraft[]> {
     );
   }
 
+  /* 4 — operating-hours summaries (Phase 38 Parts N and I)
+     Derived from heritage_operating_hours so the chatbot can answer
+     hours questions with the stored provenance labels (VERIFIED /
+     DEMO / CONFLICT / ASTROVA_ESTIMATE) instead of inventing times.
+     Only rows effective today are summarised; each chunk carries the
+     schedule's source_url, source_type and verification status. */
+  for (const draft of await buildHoursDrafts()) drafts.push(draft);
+
+  return drafts;
+}
+
+const HOURS_TITLE_PREFIX = "Operating hours — ";
+
+/** Current (effective today) hours summaries, one chunk per entity. */
+async function buildHoursDrafts(): Promise<ChunkDraft[]> {
+  const drafts: ChunkDraft[] = [];
+  const { rows } = await query<{
+    heritage_id: string;
+    name: string;
+    day_of_week: number;
+    open_time: string | null;
+    close_time: string | null;
+    is_closed: boolean;
+    is_24_hours: boolean;
+    schedule_status: string;
+    verification_status: string;
+    source_type: string;
+    source_url: string | null;
+    special_note: string | null;
+  }>(
+    `SELECT h.heritage_id, he.name, h.day_of_week,
+            h.open_time::text AS open_time, h.close_time::text AS close_time,
+            h.is_closed, h.is_24_hours, h.schedule_status, h.verification_status,
+            h.source_type, h.source_url, h.special_note
+       FROM heritage_operating_hours h
+       JOIN heritage_entities he ON he.id = h.heritage_id
+      WHERE (h.effective_from IS NULL OR h.effective_from <= CURRENT_DATE)
+        AND (h.effective_until IS NULL OR h.effective_until >= CURRENT_DATE)
+      ORDER BY he.name, h.day_of_week`
+  );
+
+  const byEntity = new Map<string, typeof rows>();
+  for (const row of rows) {
+    const list = byEntity.get(row.heritage_id) || [];
+    list.push(row);
+    byEntity.set(row.heritage_id, list);
+  }
+
+  const DAY_ABBR = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const STATUS_PRIORITY = ["CONFLICT", "DEMO", "ASTROVA_ESTIMATE", "VERIFIED"];
+
+  for (const [heritageId, list] of byEntity) {
+    const name = list[0].name;
+    const status =
+      STATUS_PRIORITY.find((s) => list.some((r) => r.schedule_status === s)) || "VERIFIED";
+    const sourceUrl = list.find((r) => r.source_url)?.source_url ?? null;
+    const sourceType = list[0].source_type;
+    const note = list.find((r) => r.special_note)?.special_note ?? null;
+
+    // Group days that share one window: {Mon–Fri: 09:00–17:00, Sat: closed}
+    const groups = new Map<string, number[]>();
+    for (const r of list) {
+      const window = r.is_closed
+        ? "closed"
+        : r.is_24_hours
+          ? "open 24 hours"
+          : `${(r.open_time || "").slice(0, 5)}–${(r.close_time || "").slice(0, 5)}`;
+      const days = groups.get(window) || [];
+      days.push(r.day_of_week);
+      groups.set(window, days);
+    }
+    const dayLines = [...groups.entries()]
+      .map(([window, days]) => {
+        const sorted = [...days].sort((a, b) => a - b);
+        const label =
+          sorted.length === 7 && window !== "closed"
+            ? "Daily"
+            : sorted.map((d) => DAY_ABBR[d]).join(", ");
+        return `${label}: ${window}`;
+      })
+      .join("; ");
+
+    const honesty =
+      status === "CONFLICT"
+        ? "Published sources disagree (CONFLICT): present this as a conflict and do not state a single schedule."
+        : status === "DEMO"
+          ? "This is DEMO data (Astrova demo dataset) — never describe it as verified."
+          : status === "ASTROVA_ESTIMATE"
+            ? "The clock times are Astrova estimates, not official times."
+            : "The schedule is VERIFIED against the cited source.";
+
+    const statusLead =
+      status === "CONFLICT"
+        ? "CONFLICT — published sources disagree"
+        : status === "DEMO"
+          ? "DEMO — demo data, not verified"
+          : status === "ASTROVA_ESTIMATE"
+            ? "ASTROVA ESTIMATE — approximate times"
+            : "VERIFIED";
+
+    const content = [
+      `${name} operating hours (${statusLead}): ${dayLines}.`,
+      note ? `Note: ${note}` : null,
+      `Provenance: schedule status ${status}, source type ${sourceType}${sourceUrl ? `, source ${sourceUrl}` : ""}.`,
+      honesty,
+    ]
+      .filter(Boolean)
+      .join("\n");
+
+    const verificationStatus: ChunkDraft["verificationStatus"] =
+      status === "VERIFIED" ? "VERIFIED" : "UNVERIFIED";
+
+    drafts.push({
+      title: `${HOURS_TITLE_PREFIX}${name}`,
+      content,
+      contentHash: hashContent("en", content),
+      language: "en",
+      authorityTier: tierForSourceType(sourceType),
+      license: null,
+      sourceUrl,
+      sourceType,
+      verificationStatus,
+      sourceId: null,
+      heritageId,
+      knowledgeId: null,
+      chunkIndex: 0,
+    });
+  }
+
   return drafts;
 }
 
@@ -359,6 +488,7 @@ export interface IngestReport {
   chunksInserted: number;
   chunksUpdated: number;
   chunksSkipped: number;
+  chunksRemoved: number;
   error: string | null;
   elapsedMs: number;
 }
@@ -374,6 +504,7 @@ export async function ingestKnowledge(options: { embed?: boolean } = {}): Promis
     chunksInserted: 0,
     chunksUpdated: 0,
     chunksSkipped: 0,
+    chunksRemoved: 0,
     error: null,
     elapsedMs: 0,
   };
@@ -471,6 +602,21 @@ export async function ingestKnowledge(options: { embed?: boolean } = {}): Promis
         report.chunksUpdated += res.rowCount ?? 0;
       }
     }
+
+    // Phase 38: operating-hours summaries are DERIVED from
+    // heritage_operating_hours, so a schedule change must remove the
+    // outdated summary chunk instead of leaving a stale one behind.
+    const hoursHashes = drafts
+      .filter((d) => d.title.startsWith(HOURS_TITLE_PREFIX))
+      .map((d) => d.contentHash);
+    const stale = await query<{ id: string }>(
+      `DELETE FROM rag_chunks
+        WHERE title LIKE $2
+          AND NOT (content_hash = ANY($1::text[]))
+        RETURNING id`,
+      [hoursHashes, `${HOURS_TITLE_PREFIX}%`]
+    );
+    report.chunksRemoved = stale.rows.length;
 
     report.elapsedMs = Date.now() - started;
     await query(

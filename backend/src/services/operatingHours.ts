@@ -57,6 +57,10 @@ export interface HourRow {
   source_type: string;
   schedule_status: ScheduleStatus;
   verification_status: "UNVERIFIED" | "REVIEWED" | "VERIFIED";
+  /** Phase 38: effective dating, so dated overrides (seasonal closures,
+   *  policy changes) can supersede an undated weekly default. */
+  effective_from?: string | null;
+  effective_until?: string | null;
 }
 
 export interface ZonedNow {
@@ -356,8 +360,28 @@ export function computeSituation(rows: HourRow[], z: ZonedNow): Situation {
     };
   }
 
+  // One row per weekday, with deterministic override preference:
+  // a dated row (effective_from set) beats an undated weekly default,
+  // and the later effective_from wins between dated rows. This lets a
+  // dated closure or policy change supersede the default without
+  // making the result depend on row order.
   const rowsByDay = new Map<number, HourRow>();
-  for (const r of rows) rowsByDay.set(r.day_of_week, r);
+  const rank = (r: HourRow): [number, string] => [
+    r.effective_from ? 1 : 0,
+    r.effective_from || "",
+  ];
+  for (const r of rows) {
+    const existing = rowsByDay.get(r.day_of_week);
+    if (!existing) {
+      rowsByDay.set(r.day_of_week, r);
+      continue;
+    }
+    const [aSpec, aFrom] = rank(existing);
+    const [bSpec, bFrom] = rank(r);
+    if (bSpec > aSpec || (bSpec === aSpec && bFrom > aFrom)) {
+      rowsByDay.set(r.day_of_week, r);
+    }
+  }
 
   const todayRow = rowsByDay.get(z.dayOfWeek);
   const today = todaySchedule(todayRow, z);
@@ -594,7 +618,8 @@ export async function getScheduleRows(
   const { rows } = await query<HourRow>(
     `SELECT id, day_of_week, open_time::text AS open_time, close_time::text AS close_time,
             is_closed, is_24_hours, special_note, source_url, source_type,
-            schedule_status, verification_status
+            schedule_status, verification_status,
+            effective_from::text AS effective_from, effective_until::text AS effective_until
        FROM heritage_operating_hours
       WHERE heritage_id = $1
         AND (effective_from IS NULL OR effective_from <= $2::date)

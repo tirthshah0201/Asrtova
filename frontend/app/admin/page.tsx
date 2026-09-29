@@ -172,7 +172,34 @@ interface RagStatusData {
     finished_at: string | null;
     error: string | null;
   } | null;
-  generation: { backend: string; model: string | null; reason: string };
+  generation: {
+    backend: string;
+    model: string | null;
+    reason: string;
+    /* Phase 38 Part S — live runtime verification */
+    active?: boolean;
+    status?: string;
+    metrics?: {
+      samples: number;
+      p50Ms: number | null;
+      p95Ms: number | null;
+      lastMs: number | null;
+      lastBackend: string | null;
+      lastStatus: string | null;
+    };
+  };
+  /* Phase 38 Part S — hours coverage + review workload */
+  hours?: {
+    totalEntities: number;
+    covered: number;
+    missing: number;
+    verified: number;
+    conflict: number;
+    demo: number;
+    estimate: number;
+    rows: number;
+  };
+  reviews?: { pending: number; conflict: number; unresolved: number };
   note: string;
 }
 
@@ -2421,10 +2448,44 @@ function DataOpsTab({ showToast }: { showToast: (msg: string, type: "success" | 
               <p className="text-xs text-muted">{rag.chunks.verified} verified · {Object.keys(rag.chunks.languages).length} languages</p>
             </div>
             <div className="rounded-lg border border-border p-3">
-              <p className="text-[10px] uppercase tracking-wider text-muted">Generation backend</p>
-              <p className="mt-1 text-sm font-medium text-charcoal capitalize">{rag.generation.backend}</p>
+              <p className="text-[10px] uppercase tracking-wider text-muted">Generation</p>
+              <p className="mt-1 text-sm font-medium text-charcoal capitalize">
+                {rag.generation.backend}
+                {rag.generation.model ? ` · ${rag.generation.model}` : ""}
+              </p>
+              <p
+                className={`text-xs font-semibold ${
+                  rag.generation.active ? "text-emerald-600" : "text-amber-600"
+                }`}
+              >
+                Status: {rag.generation.status || (rag.generation.active ? "ACTIVE" : "NO LLM RUNTIME")}
+                {rag.generation.metrics && rag.generation.metrics.samples > 0
+                  ? ` · p50 ${rag.generation.metrics.p50Ms} ms (${rag.generation.metrics.samples} samples)`
+                  : ""}
+              </p>
               <p className="text-xs text-muted line-clamp-2">{rag.generation.reason}</p>
             </div>
+            {rag.hours && (
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-[10px] uppercase tracking-wider text-muted">Heritage hours</p>
+                <p className="mt-1 text-sm font-medium text-charcoal">
+                  {rag.hours.covered} / {rag.hours.totalEntities} entities
+                </p>
+                <p className="text-xs text-muted">
+                  {rag.hours.verified} verified · {rag.hours.conflict} conflict · {rag.hours.demo} demo ·{" "}
+                  {rag.hours.estimate} estimate · {rag.hours.missing} missing
+                </p>
+              </div>
+            )}
+            {rag.reviews && (
+              <div className="rounded-lg border border-border p-3">
+                <p className="text-[10px] uppercase tracking-wider text-muted">Unresolved reviews</p>
+                <p className="mt-1 text-sm font-medium text-charcoal">{rag.reviews.unresolved}</p>
+                <p className="text-xs text-muted">
+                  {rag.reviews.pending} pending review · {rag.reviews.conflict} in conflict
+                </p>
+              </div>
+            )}
             <div className="sm:col-span-2 lg:col-span-4 flex flex-wrap gap-2">
               {Object.entries(rag.chunks.languages).map(([lang, n]) => (
                 <span key={lang} className="rounded-full border border-border px-2.5 py-1 text-xs text-charcoal">

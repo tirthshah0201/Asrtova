@@ -22,6 +22,7 @@ import {
   getEmbeddingProvider,
   toVectorLiteral,
 } from "./embed";
+import { tokenize, hasIndicScript } from "./prompt";
 
 export const DEFAULT_TOP_K = 5;
 /** Calibrated against this model in this environment: relevant passages
@@ -195,8 +196,25 @@ export async function retrieve(
   const literal = toVectorLiteral(vector);
   const fetchK = Math.min(topK * 4, 80);
 
+  // Same-script lexical gate (Phase 38): a short query in the same
+  // script as a candidate must share at least one content term with it
+  // — pure vector similarity inflates scores between generically-
+  // worded passages in one language (e.g. a Charminar question
+  // "matching" an unrelated Hindi monument description at 0.81).
+  // Cross-script candidates are exempt: token overlap is structurally
+  // impossible there, so the multilingual embedding decides.
+  const queryTerms = tokenize(queryText);
+  const queryIndic = hasIndicScript(queryText);
+  const lexicalOk = (text: string): boolean => {
+    if (queryTerms.length === 0) return true;
+    if (hasIndicScript(text) !== queryIndic) return true;
+    const hay = text.toLowerCase();
+    return queryTerms.some((t) => hay.includes(t));
+  };
+
   const scoreRows = (rows: CandidateRow[]): RetrievedChunk[] =>
     rows
+      .filter((row) => lexicalOk(`${row.title} ${row.content}`))
       .map((row) => {
         const similarity = Number(row.similarity);
         const tierBonus = tierBonusFor(row.authority_tier);

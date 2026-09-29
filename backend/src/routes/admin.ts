@@ -27,7 +27,7 @@ import { DAY_NAMES, validateSchedule } from "../services/operatingHours";
 import { DEMO_PLACE_CATEGORIES, demoPlacesStats } from "../services/demoPlaces";
 import { embeddingDimensions, embeddingModelName } from "../services/rag/embed";
 import { pgvectorAvailable } from "../services/rag/retrieve";
-import { getGenerationStatus } from "../services/rag/generate";
+import { getGenerationStatus, getGenerationMetrics } from "../services/rag/generate";
 import { ingestKnowledge } from "../services/rag/knowledge";
 
 const router = Router();
@@ -1998,7 +1998,7 @@ router.delete("/demo-places/:id", async (req, res) => {
 router.get("/rag/status", async (_req, res) => {
   if (!requireDatabase(res)) return;
   try {
-    const [pgvector, counts, lastRun, generation] = await Promise.all([
+    const [pgvector, counts, lastRun, generation, metrics, hours, reviews] = await Promise.all([
       pgvectorAvailable(),
       query<{ total: string; embedded: string; languages: string; tiers: string; verified: string }>(
         `SELECT count(*) AS total,
@@ -2013,8 +2013,37 @@ router.get("/rag/status", async (_req, res) => {
            FROM rag_ingest_runs ORDER BY started_at DESC LIMIT 1`
       ),
       getGenerationStatus(),
+      Promise.resolve(getGenerationMetrics()),
+      // Phase 38 Part S — operating-hours coverage + conflict counts.
+      query<{
+        total_entities: number;
+        covered: number;
+        verified: number;
+        conflict: number;
+        demo: number;
+        estimate: number;
+        rows: number;
+      }>(
+        `SELECT (SELECT count(*)::int FROM heritage_entities) AS total_entities,
+                (SELECT count(DISTINCT heritage_id)::int FROM heritage_operating_hours) AS covered,
+                count(DISTINCT heritage_id) FILTER (WHERE schedule_status = 'VERIFIED')::int AS verified,
+                count(DISTINCT heritage_id) FILTER (WHERE schedule_status = 'CONFLICT')::int AS conflict,
+                count(DISTINCT heritage_id) FILTER (WHERE schedule_status = 'DEMO')::int AS demo,
+                count(DISTINCT heritage_id) FILTER (WHERE schedule_status = 'ASTROVA_ESTIMATE')::int AS estimate,
+                count(*)::int AS rows
+           FROM heritage_operating_hours`
+      ),
+      // Phase 38 Part S — unresolved data-review workload.
+      query<{ pending: number; conflict: number; total: number }>(
+        `SELECT count(*) FILTER (WHERE status = 'PENDING_REVIEW')::int AS pending,
+                count(*) FILTER (WHERE status = 'CONFLICT')::int AS conflict,
+                count(*)::int AS total
+           FROM enrichment_proposals`
+      ),
     ]);
     const row = counts.rows[0];
+    const h = hours.rows[0];
+    const rev = reviews.rows[0];
     res.json({
       success: true,
       data: {
@@ -2032,7 +2061,27 @@ router.get("/rag/status", async (_req, res) => {
           tiers: row?.tiers || {},
         },
         lastRun: lastRun.rows[0] || null,
-        generation,
+        generation: {
+          ...generation,
+          active: generation.backend !== "local_extractive",
+          status: generation.backend !== "local_extractive" ? "ACTIVE" : "NO LLM RUNTIME",
+          metrics,
+        },
+        hours: {
+          totalEntities: Number(h?.total_entities || 0),
+          covered: Number(h?.covered || 0),
+          missing: Number(h?.total_entities || 0) - Number(h?.covered || 0),
+          verified: Number(h?.verified || 0),
+          conflict: Number(h?.conflict || 0),
+          demo: Number(h?.demo || 0),
+          estimate: Number(h?.estimate || 0),
+          rows: Number(h?.rows || 0),
+        },
+        reviews: {
+          pending: Number(rev?.pending || 0),
+          conflict: Number(rev?.conflict || 0),
+          unresolved: Number(rev?.pending || 0) + Number(rev?.conflict || 0),
+        },
         note: "No chunk may carry verification_status REJECTED; rejected enrichment is excluded by schema.",
       },
     });

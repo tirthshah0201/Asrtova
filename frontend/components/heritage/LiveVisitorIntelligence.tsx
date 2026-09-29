@@ -198,6 +198,8 @@ export function LiveVisitorIntelligence({ heritageId, hasCoordinates }: VisitorI
                     className={`inline-block h-2.5 w-2.5 rounded-full ${
                       data.situation.status === "OPEN" || data.situation.status === "OPEN_24_HOURS"
                         ? "bg-emerald-500"
+                        : data.situation.conflict
+                        ? "bg-amber-500"
                         : data.situation.status === "CLOSING_SOON" || data.situation.status === "OPENING_SOON"
                         ? "bg-amber-500"
                         : data.situation.status === "CLOSED" || data.situation.status === "CLOSED_TODAY"
@@ -245,12 +247,18 @@ export function LiveVisitorIntelligence({ heritageId, hasCoordinates }: VisitorI
                   </p>
                 )}
 
-                {/* Honest origin label (Part X) */}
+                {/* Honest origin label (Part X, Phase 38 Part R) */}
                 <p className="mt-2 text-xs text-muted">
-                  {data.situation.status === "INFORMATION_UNAVAILABLE"
-                    ? "INFORMATION UNAVAILABLE — no trustworthy schedule exists for this site yet."
+                  {data.situation.conflict
+                    ? "Hours in conflict — published sources disagree. Please verify before visiting."
+                    : data.situation.status === "INFORMATION_UNAVAILABLE"
+                    ? "INFORMATION UNAVAILABLE — no trusted operating-hours record is available for this site."
+                    : data.situation.dataOrigin === "VERIFIED"
+                    ? `Verified${data.situation.source ? ` · ${data.situation.source.name}` : ""}`
                     : data.situation.dataOrigin === "DEMO"
                     ? "Demo hours — not verified. Check official sources before travelling."
+                    : data.situation.dataOrigin === "ASTROVA_ESTIMATE"
+                    ? "Astrova estimate — approximate times, not an official schedule."
                     : "Schedule from a recorded source — check official sources before travelling."}
                   {data.situation.source && (
                     <> Last checked {formatUpdated(data.situation.checkedAt)}.</>

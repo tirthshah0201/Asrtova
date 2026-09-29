@@ -303,6 +303,66 @@ async function main() {
     assert(terms.includes("rani") || terms.includes("vav"), "romanized tokens lost");
   });
 
+  /* ---- Phase 38 Part L: own-language sources for all six languages ---- */
+
+  await check("every language returns an own-language cited source (Part L)", async () => {
+    const cases = [
+      { message: "What is the Charminar?", language: "en" },
+      { message: "रानी की वाव के बारे में बताओ", language: "hi" },
+      { message: "રાણી કી વાવ વિશે જણાવો", language: "gu" },
+      { message: "रानी की वाव बद्दल सांगा", language: "mr" },
+      { message: "ராணி கி வாவ் பற்றி சொல்லுங்கள்", language: "ta" },
+      { message: "ਰਾਣੀ ਕੀ ਵਾਵ ਬਾਰੇ ਦੱਸੋ", language: "pa" },
+    ];
+    for (const c of cases) {
+      const r = await runRagChat(c);
+      assert.strictEqual(
+        r.status,
+        "success",
+        c.language + " expected success, got " + r.status + " (" + r.unavailableReason + ")"
+      );
+      assert.strictEqual(r.retrieval.languageFallback, false,
+        c.language + " should be served from its own language, not the fallback");
+      assert(
+        r.sources.some((s) => s.language === c.language),
+        c.language + " answer has no " + c.language + " source: " + r.sources.map((s) => s.language).join(",")
+      );
+      for (const s of r.sources) {
+        assert(typeof s.language === "string" && s.language.length === 2, "source language hidden");
+        assert(s.tierLabel, "tier label missing");
+        assert(s.verificationStatus, "verification status missing");
+      }
+    }
+  });
+
+  await check("cross-language fallback keeps the source language visible (Part L)", async () => {
+    const r = await runRagChat({ message: "चारमीनार के बारे में बताओ", language: "hi" });
+    assert.strictEqual(r.status, "success", "expected success, got " + r.status);
+    assert.strictEqual(r.retrieval.languageFallback, true, "expected languageFallback");
+    assert.strictEqual(r.sources[0].title, "Charminar");
+    assert.strictEqual(r.sources[0].language, "en", "fallback source must show its real language");
+    assert(r.answer.includes("[1]"), "fallback answer must cite its source");
+  });
+
+  await check("Romanized Gujarati answers from provenance-bearing sources (Part M)", async () => {
+    const r = await runRagChat({
+      message: "Rani ki Vav kyare banavyu hatu?",
+      language: "gu",
+    });
+    assert.strictEqual(
+      r.status,
+      "success",
+      "romanized Gujarati expected success, got " + r.status + " (" + r.unavailableReason + ")"
+    );
+    assert(r.sources.length > 0, "no sources for romanized input");
+    assert(/Rani ki Vav/i.test(r.sources[0].title), "wrong entity: " + r.sources[0].title);
+    assert(/\[\d+\]/.test(r.answer), "romanized answer has no citation");
+    for (const s of r.sources) {
+      assert(s.language && s.tierLabel && s.verificationStatus, "provenance incomplete");
+      assert(!("reviewerEmail" in s), "reviewer data leaked");
+    }
+  });
+
   /* ---- Part R: security ---- */
 
   await check("prompt injection in the question is flagged and neutralised", async () => {
